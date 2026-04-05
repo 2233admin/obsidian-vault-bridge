@@ -31,15 +31,26 @@ export class WsServer {
 
   start(): void {
     this.httpServer = http.createServer();
-    this.wss = new WebSocketServer({ server: this.httpServer });
+    this.httpServer.maxConnections = 50;
+    this.wss = new WebSocketServer({
+      server: this.httpServer,
+      maxPayload: 10 * 1024 * 1024, // 10MB
+    });
 
     this.wss.on("connection", (ws: WebSocket) => {
+      // reject if too many clients
+      if (this.clients.size >= 20) {
+        ws.close(4004, "Too many connections");
+        ws.terminate();
+        return;
+      }
+
       this.clients.set(ws, { authenticated: false });
 
       const authTimer = setTimeout(() => {
         if (!this.clients.get(ws)?.authenticated) {
-          ws.close(4001, "Auth timeout");
           this.clients.delete(ws);
+          ws.terminate(); // force-kill, don't wait for graceful close
         }
       }, 5000);
 
@@ -50,12 +61,14 @@ export class WsServer {
       ws.on("close", () => {
         clearTimeout(authTimer);
         this.clients.delete(ws);
+        ws.terminate(); // ensure socket is fully destroyed
       });
 
       ws.on("error", (err) => {
         console.error("Vault Bridge: client error", err.message);
         clearTimeout(authTimer);
         this.clients.delete(ws);
+        ws.terminate();
       });
     });
 
@@ -64,7 +77,7 @@ export class WsServer {
 
   stop(): void {
     for (const ws of this.clients.keys()) {
-      ws.close(1001, "Server shutting down");
+      ws.terminate(); // force-kill all connections
     }
     this.clients.clear();
     this.wss?.close();
