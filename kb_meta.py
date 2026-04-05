@@ -50,11 +50,15 @@ def now_iso() -> str:
 
 
 def file_hash(path: Path) -> str:
-    h = hashlib.blake2b(path.read_bytes(), digest_size=8)
+    h = hashlib.blake2b(digest_size=8)
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            h.update(chunk)
     return h.hexdigest()
 
 
 def parse_frontmatter(text: str) -> dict:
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     if not text.startswith("---"):
         return {}
     end = text.find("\n---", 3)
@@ -224,24 +228,23 @@ def cmd_check_links(vault: str, topic: str) -> dict:
 
     broken = []
     total = 0
+    # pre-collect wiki subdirs once (avoid re-scanning per link)
+    wiki_subdirs = [d for d in wiki.iterdir() if d.is_dir() and not d.name.startswith("_")]
     for f in walk_md(wiki):
         text = f.read_text("utf-8", errors="replace")
         links = extract_wikilinks(text)
         rel_from = f.relative_to(base).as_posix()
         for link in links:
             total += 1
-            # resolve: try as-is, then with .md, then under wiki/ and its subdirs
             candidates = [
                 base / link,
                 base / (link + ".md"),
                 wiki / link,
                 wiki / (link + ".md"),
             ]
-            # also check wiki subdirectories (concepts/, summaries/, queries/)
-            for subdir in wiki.iterdir():
-                if subdir.is_dir() and not subdir.name.startswith("_"):
-                    candidates.append(subdir / link)
-                    candidates.append(subdir / (link + ".md"))
+            for subdir in wiki_subdirs:
+                candidates.append(subdir / link)
+                candidates.append(subdir / (link + ".md"))
             if not any(c.exists() for c in candidates):
                 broken.append({"from": rel_from, "to": link})
 
@@ -252,10 +255,10 @@ def cmd_vitality(vault: str, topic: str) -> dict:
     meta = load_meta(vault, topic)
     base = Path(vault) / topic / "wiki"
     if not base.exists():
-        return {"stale": [], "never_accessed": []}
+        return {"accessed": [], "never_accessed": [], "total": 0}
 
     access_log = meta.get("access_log", {})
-    stale, never_accessed = [], []
+    accessed, never_accessed = [], []
 
     for f in walk_md(base):
         if f.name.startswith("_"):
@@ -266,12 +269,16 @@ def cmd_vitality(vault: str, topic: str) -> dict:
         else:
             last = access_log[rel].get("last_access", "")
             count = access_log[rel].get("count", 0)
-            stale.append({"path": rel, "last_access": last, "count": count})
+            accessed.append({"path": rel, "last_access": last, "count": count})
 
-    # sort stale by last_access ascending (oldest first)
-    stale.sort(key=lambda x: x["last_access"])
+    # sort accessed by last_access ascending (oldest = most stale first)
+    accessed.sort(key=lambda x: x["last_access"])
 
-    return {"stale": stale, "never_accessed": sorted(never_accessed)}
+    return {
+        "accessed": accessed,
+        "never_accessed": sorted(never_accessed),
+        "total": len(accessed) + len(never_accessed),
+    }
 
 
 def cmd_log_access(vault: str, topic: str, article: str) -> dict:
