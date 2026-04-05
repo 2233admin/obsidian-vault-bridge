@@ -7,3 +7,8 @@ __pycache__/
 *.pyc
 .mypy_cache/
 package-lock.json
+_test_*.js
+_attack_*.js
+_stress_*.js
+_stress_*.mjs
+_stress_*.json
