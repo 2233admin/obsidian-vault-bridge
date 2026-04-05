@@ -1,0 +1,8 @@
+{
+  "name": "vault-bridge",
+  "version": "0.2.0",
+  "description": "Obsidian vault as LLM knowledge infrastructure. Ingest, compile, query, lint, evolve -- Karpathy workflow with a real compiler engine.",
+  "author": "Curry",
+  "keywords": ["obsidian", "knowledge-base", "wiki", "mcp", "karpathy"],
+  "skills": ["vault-bridge"]
+}

@@ -1,0 +1,39 @@
+# KB Compile Configuration
+# Copy to {topic}/schema/compile-config.yaml and customize per topic.
+# Omitted fields use these defaults.
+
+extraction:
+  # Prompt sent to extraction subagent. Raw file content is appended after this.
+  prompt: |
+    Read the following source material and extract:
+    1. A one-line summary (max 120 chars)
+    2. Key points as a bullet list (5-15 items, each self-contained)
+    3. Concepts: named ideas, methods, or entities worth their own article
+       For each concept: name, one-liner, overview paragraph, key properties
+    4. Relationships between concepts: [from, relation, to]
+
+    Return valid JSON:
+    {
+      "summary": { "title": "...", "one_liner": "...", "key_points": ["..."] },
+      "concepts": [
+        { "name": "...", "one_liner": "...", "overview": "...", "properties": ["..."] }
+      ],
+      "relationships": [
+        { "from": "...", "relation": "...", "to": "..." }
+      ]
+    }
+
+  max_concepts_per_source: 10
+  model_tier: balanced   # fast = haiku, balanced = sonnet, deep = opus
+  parallelism: 3
+
+# Source count thresholds for coverage tag in frontmatter.
+coverage:
+  low: 1
+  medium: 2
+  high: 4
+
+frontmatter_required:
+  - sources
+  - coverage
+  - compiled

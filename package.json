@@ -1,0 +1,37 @@
+{
+  "name": "obsidian-vault-bridge",
+  "version": "0.1.0",
+  "description": "Obsidian plugin that exposes your vault to AI agents via WebSocket + MCP",
+  "main": "main.js",
+  "license": "MIT",
+  "author": "Curry",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/2233admin/obsidian-vault-bridge"
+  },
+  "keywords": [
+    "obsidian",
+    "obsidian-plugin",
+    "mcp",
+    "websocket",
+    "ai-agent",
+    "knowledge-base",
+    "vault"
+  ],
+  "scripts": {
+    "build": "node esbuild.config.mjs production",
+    "dev": "node esbuild.config.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "@types/ws": "^8.18.1",
+    "typescript": "~5.9.3",
+    "esbuild": "^0.25.5",
+    "builtin-modules": "3.3.0",
+    "obsidian": "latest",
+    "tslib": "2.4.0"
+  }
+}

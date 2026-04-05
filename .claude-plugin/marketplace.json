@@ -1,0 +1,10 @@
+{
+  "name": "vault-bridge",
+  "owner": "2233admin",
+  "plugins": [
+    {
+      "name": "vault-bridge",
+      "path": "."
+    }
+  ]
+}

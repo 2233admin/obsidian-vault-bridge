@@ -1,0 +1,9 @@
+node_modules/
+main.js
+data.json
+styles.css
+.omc/
+__pycache__/
+*.pyc
+.mypy_cache/
+package-lock.json

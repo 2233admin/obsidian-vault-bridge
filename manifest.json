@@ -1,0 +1,9 @@
+{
+  "id": "vault-bridge",
+  "name": "Vault Bridge",
+  "version": "0.1.0",
+  "minAppVersion": "1.0.0",
+  "description": "WebSocket server exposing vault capabilities to external agents",
+  "author": "Curry",
+  "isDesktopOnly": true
+}
