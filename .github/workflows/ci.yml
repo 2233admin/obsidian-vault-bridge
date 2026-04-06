@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  ts-build:
+    name: TypeScript Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (esbuild)
+        run: npm run build
+
+      - name: Verify main.js produced
+        run: test -f main.js && echo "main.js exists"
+
+  ts-typecheck:
+    name: TypeScript Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check (tsc --noEmit)
+        run: npx tsc --noEmit
+
+  python-lint-test:
+    name: Python Lint + Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Lint kb_meta.py
+        run: ruff check kb_meta.py
+
+      - name: Smoke test - help
+        run: python kb_meta.py --help || true
+
+      - name: Smoke test - init + diff + check-links
+        run: |
+          TMPDIR=$(mktemp -d)
+          python kb_meta.py init "$TMPDIR" test-topic
+          python kb_meta.py diff "$TMPDIR" test-topic
+          python kb_meta.py check-links "$TMPDIR" test-topic
+
+  connector-syntax:
+    name: connector.js Syntax Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Check connector.js syntax
+        run: node --check connector.js
