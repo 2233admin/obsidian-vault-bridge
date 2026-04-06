@@ -76,7 +76,7 @@ export interface VaultMindAdapter {
 
   search?(query: string, opts?: SearchOpts): Promise<SearchResult[]>;
   read?(path: string): Promise<string>;
-  write?(path: string, content: string): Promise<void>;
+  write?(path: string, content: string, dryRun?: boolean): Promise<void>;
 
   // --- Graph ---
 

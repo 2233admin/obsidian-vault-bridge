@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"cd \\\"D:/projects/vault-mind/compiler\\\" && py -3.11 -m ruff check . 2>&1 || py -3 -m ruff check . 2>&1\",\"description\":\"Ruff lint Python compiler\"}",
+  "error": "Exit code 1\nE501 Line too long (150 > 100)\n  --> kb_meta.py:91:101\n   |\n90 | …\n91 | …nditer(r\"\\[\\[([^\\]|]+?)(?:\\|[^\\]]*)?\\]\\]\", text) if not m.group(1).strip().startswith(\"#\")]\n   |                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n   |\n\nE501 Line too long (137 > 100)\n  --> kb_meta.py:97:101\n   |\n95 | …\n96 | …\n97 | …(\".obsidian\", \"node_modules\", \".git\", \"schema\", \".trash\") and not d.startswith(\"_\"))\n   |                                                 ^...",
+  "timestamp": "2026-04-06T22:30:04.483Z",
+  "retry_count": 1
+}

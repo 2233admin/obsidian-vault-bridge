@@ -88,13 +88,21 @@ def parse_frontmatter(text: str) -> dict:
 
 
 def extract_wikilinks(text: str) -> list[str]:
-    return [m.group(1).split("#")[0].strip() for m in re.finditer(r"\[\[([^\]|]+?)(?:\|[^\]]*)?\]\]", text) if not m.group(1).strip().startswith("#")]
+    pattern = r"\[\[([^\]|]+?)(?:\|[^\]]*)?\]\]"
+    return [
+        m.group(1).split("#")[0].strip()
+        for m in re.finditer(pattern, text)
+        if not m.group(1).strip().startswith("#")
+    ]
 
 
 def walk_md(base: Path) -> list[Path]:
     results = []
     for root, dirs, files in os.walk(base):
-        dirs[:] = sorted(d for d in dirs if d not in (".obsidian", "node_modules", ".git", "schema", ".trash") and not d.startswith("_"))
+        skip = (".obsidian", "node_modules", ".git", "schema", ".trash")
+        dirs[:] = sorted(
+            d for d in dirs if d not in skip and not d.startswith("_")
+        )
         for f in sorted(files):
             if f.endswith(".md"):
                 results.append(Path(root) / f)
@@ -209,7 +217,9 @@ def cmd_update_index(vault: str, topic: str) -> dict:
     index_content = (
         f"# {topic} Knowledge Base\n\n"
         f"> Auto-maintained index. Do not edit manually.\n"
-        f"> Sources: {source_count} | Articles: {len(summaries)} | Concepts: {len(concepts)} | Last compiled: {today()}\n\n"
+        f"> Sources: {source_count} | Articles: {len(summaries)}"
+        f" | Concepts: {len(concepts)}"
+        f" | Last compiled: {today()}\n\n"
         f"## Summaries\n| File | One-liner |\n|------|-----------|\n{table_rows(summaries)}\n\n"
         f"## Concepts\n| File | One-liner |\n|------|-----------|\n{table_rows(concepts)}\n\n"
         f"## Queries\n| File | One-liner |\n|------|-----------|\n{table_rows(queries)}\n"
