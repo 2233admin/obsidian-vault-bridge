@@ -49,6 +49,12 @@ Add to `~/.claude/settings.json` (or `.cursor/mcp.json`):
 
 That's it. Your agent can now read, search, and write your vault.
 
+**Want to see it work?** Run the demo to verify your setup:
+
+```bash
+node demo.js
+```
+
 ## What Can Your Agent Do?
 
 | Capability | Example |
