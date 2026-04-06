@@ -5,6 +5,7 @@
   "main": "main.js",
   "license": "MIT",
   "author": "Curry",
+  "mcpName": "io.github.2233admin/obsidian-llm-wiki",
   "repository": {
     "type": "git",
     "url": "https://github.com/2233admin/obsidian-llm-wiki"

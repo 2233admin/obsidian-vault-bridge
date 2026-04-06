@@ -12,3 +12,6 @@ _attack_*.js
 _stress_*.js
 _stress_*.mjs
 _stress_*.json
+
+# GEO submission drafts (local only)
+geo/
