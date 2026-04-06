@@ -192,12 +192,11 @@ export function registerHandlers(
 
     for (let i = 0; i < ops.length; i++) {
       const op = ops[i] as { method: string; params?: Record<string, unknown> };
-      if (!op.method?.startsWith("vault."))
-        throw { code: RPC_INVALID_PARAMS, message: `Batch only supports vault.* methods (index ${i})` } as RpcError;
-      if (op.method === "vault.batch")
-        throw { code: RPC_INVALID_PARAMS, message: "Recursive batch not allowed" } as RpcError;
-
       try {
+        if (!op.method?.startsWith("vault."))
+          throw { code: RPC_INVALID_PARAMS, message: `Batch only supports vault.* methods (index ${i})` };
+        if (op.method === "vault.batch")
+          throw { code: RPC_INVALID_PARAMS, message: "Recursive batch not allowed" };
         const handler = server.getHandler(op.method);
         if (!handler) throw { code: RPC_METHOD_NOT_FOUND, message: `Unknown: ${op.method}` };
         const params = { ...(op.params ?? {}) };
