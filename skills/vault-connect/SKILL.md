@@ -48,7 +48,7 @@ Find hidden connections between seemingly unrelated vault domains.
 
 ## Rules
 
-- **Language follows `_CLAUDE.md`** -- bridge descriptions in the user's configured language. Cross-language connections (e.g., a Chinese note bridging to an English note) are especially valuable -- flag them.
+- **All output in the user's language** (from `_CLAUDE.md` Language section). Translate ALL template headings: "## 发现的联系", "**领域A：**", "**桥梁：**", "**启示：**" for Chinese users. Cross-language connections (e.g., a Chinese note bridging to an English note) are especially valuable -- flag them.
 - **Surprise is the metric** -- "two related notes are related" is boring
 - **Structural analogy, not surface similarity** -- shared words don't count. Shared SHAPES count.
 - **Be honest about stretch** -- label genuine insights vs creative reaching

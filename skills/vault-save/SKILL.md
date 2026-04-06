@@ -40,7 +40,7 @@ Save conversation knowledge to your Obsidian vault.
 
 ## Rules
 
-- **Language follows `_CLAUDE.md`** -- output language, writing style, and term handling all follow the Language section. When updating an existing note, match that note's language.
+- **All output in the user's language** (from `_CLAUDE.md` Language section). Note content, status reports, and log entries all in user's language. When updating an existing note, match that note's language.
 - **Search before creating** -- duplicate notes are vault rot
 - **Propagate every write** -- daily note + linked notes + index
 - **Never create orphans** -- every note linked from somewhere

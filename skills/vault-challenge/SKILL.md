@@ -52,7 +52,7 @@ The vault challenges your current thinking using your own history.
 
 ## Rules
 
-- **Language follows `_CLAUDE.md`** -- output in the user's configured language. When quoting vault notes, preserve the original language (don't translate quotes).
+- **All output in the user's language** (from `_CLAUDE.md` Language section). The templates below are structural examples in English -- translate ALL headings, labels, and descriptions. E.g., Chinese user sees "## 挑战：", "### 你自己说过的话", "### 上次发生了什么", not English headings. Only direct quotes from vault notes stay in their original language.
 - **Quote the user's own words** -- this is what makes it hit different from generic critique
 - **Never fabricate evidence** -- if the vault doesn't have it, say so
 - **Be specific** -- "you tried X on 2026-03-15 and it failed because Y" not "you've had mixed results"

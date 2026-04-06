@@ -74,7 +74,7 @@ Promote a recurring concept from scattered mentions to a dedicated vault page.
 
 ## Rules
 
-- **Language follows `_CLAUDE.md`** -- concept page written in the configured language. When a concept appears in multiple languages, use the configured primary language for the page title and body, noting alternate terms. Search must cover all languages in the vault.
+- **All output in the user's language** (from `_CLAUDE.md` Language section). Concept page title, headings ("## 起源", "## 含义", "## 出现位置", "## 开放问题"), and body all in user's language. When a concept has terms in multiple languages, use primary language for title and note alternates. Search covers all languages in the vault.
 - **3+ mentions minimum** to graduate
 - **Cross-folder mentions are stronger signal**
 - **Preserve origin story** -- where the concept first appeared

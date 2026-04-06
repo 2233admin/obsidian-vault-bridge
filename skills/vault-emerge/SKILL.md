@@ -48,7 +48,7 @@ Find patterns hiding in your vault that you haven't named yet.
 
 ## Rules
 
-- **Language follows `_CLAUDE.md`** -- pattern names and descriptions in the user's configured language. Evidence quotes stay in original language. Search in all languages present in the vault.
+- **All output in the user's language** (from `_CLAUDE.md` Language section). Translate ALL template headings and labels. E.g., Chinese user sees "## 浮现的模式", "### 1. [模式名]", "**证据：**", not English. Pattern names should be in the user's language. Evidence quotes stay in original language. Search in all languages present in the vault.
 - **Minimum 3 independent data points** to call something a pattern
 - **Cross-domain signals are gold** -- same pattern in two unrelated areas is more interesting
 - **Name patterns concisely** -- if you can't name it in 5 words, you haven't understood it
