@@ -215,7 +215,13 @@ def cmd_update_index(vault: str, topic: str) -> dict:
     )
 
     index_path = wiki / "_index.md"
-    index_path.write_text(index_content, "utf-8")
+    tmp = index_path.with_suffix(".tmp")
+    try:
+        tmp.write_text(index_content, "utf-8")
+        tmp.replace(index_path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
 
     return {
         "ok": True,
