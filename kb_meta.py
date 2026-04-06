@@ -50,7 +50,8 @@ def today() -> str:
 
 
 def now_iso() -> str:
-    return datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    from datetime import timezone
+    return datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def file_hash(path: Path) -> str:
@@ -87,7 +88,7 @@ def parse_frontmatter(text: str) -> dict:
 
 
 def extract_wikilinks(text: str) -> list[str]:
-    return [m.group(1).split("#")[0] for m in re.finditer(r"\[\[([^\]|]+?)(?:\|[^\]]*)?\]\]", text) if not m.group(1).startswith("#")]
+    return [m.group(1).split("#")[0].strip() for m in re.finditer(r"\[\[([^\]|]+?)(?:\|[^\]]*)?\]\]", text) if not m.group(1).strip().startswith("#")]
 
 
 def walk_md(base: Path) -> list[Path]:
