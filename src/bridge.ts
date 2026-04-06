@@ -23,10 +23,6 @@ export class VaultBridge {
     return this.app.vault.read(this.resolveFile(path));
   }
 
-  async readBinary(path: string): Promise<ArrayBuffer> {
-    return this.app.vault.readBinary(this.resolveFile(path));
-  }
-
   stat(path: string): Record<string, unknown> {
     const af = this.app.vault.getAbstractFileByPath(path);
     if (!af) throw new Error(`Not found: ${path}`);

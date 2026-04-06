@@ -29,7 +29,7 @@ def meta_path(vault: str, topic: str) -> Path:
 def load_meta(vault: str, topic: str) -> dict:
     p = meta_path(vault, topic)
     if p.exists():
-        return json.loads(p.read_text("utf-8"))
+        return json.loads(p.read_text("utf-8-sig"))
     return {"topic": topic, "created": today(), "sources": {}, "access_log": {}}
 
 
@@ -37,8 +37,12 @@ def save_meta(vault: str, topic: str, meta: dict) -> None:
     p = meta_path(vault, topic)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(meta, indent=2, ensure_ascii=False), "utf-8")
-    tmp.replace(p)
+    try:
+        tmp.write_text(json.dumps(meta, indent=2, ensure_ascii=False), "utf-8")
+        tmp.replace(p)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def today() -> str:
@@ -164,7 +168,7 @@ def cmd_update_index(vault: str, topic: str) -> dict:
         for f in sorted(d.iterdir()):
             if not f.name.endswith(".md") or f.name.startswith("_"):
                 continue
-            text = f.read_text("utf-8", errors="replace")
+            text = f.read_text("utf-8-sig", errors="replace")
             # extract first non-heading, non-frontmatter paragraph as one-liner
             lines = text.split("\n")
             one_liner = ""
@@ -231,7 +235,7 @@ def cmd_check_links(vault: str, topic: str) -> dict:
     # pre-collect wiki subdirs once (avoid re-scanning per link)
     wiki_subdirs = [d for d in wiki.iterdir() if d.is_dir() and not d.name.startswith("_")]
     for f in walk_md(wiki):
-        text = f.read_text("utf-8", errors="replace")
+        text = f.read_text("utf-8-sig", errors="replace")
         links = extract_wikilinks(text)
         rel_from = f.relative_to(base).as_posix()
         for link in links:
