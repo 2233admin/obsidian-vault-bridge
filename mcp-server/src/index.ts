@@ -6,12 +6,14 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { execFile } from "node:child_process";
 import {
   readFileSync, existsSync, readdirSync, statSync,
   writeFileSync, appendFileSync, rmSync, renameSync, mkdirSync,
 } from "node:fs";
 import { resolve, join, basename, extname, relative, dirname, posix } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 import { FilesystemAdapter } from "./adapters/filesystem.js";
 import { MemUAdapter } from "./adapters/memu.js";
@@ -21,12 +23,15 @@ import { unifiedQuery } from "./unified-query.js";
 import { CompileTrigger } from "./compile-trigger.js";
 import type { VaultMindAdapter } from "./adapters/interface.js";
 
+const exec = promisify(execFile);
+
 // Config
 
 interface VaultMindConfig {
   vault_path: string;
   auth_token?: string;
   adapters?: string[];
+  config_path?: string;
 }
 
 function loadConfig(): VaultMindConfig {
@@ -35,11 +40,15 @@ function loadConfig(): VaultMindConfig {
     resolve(process.cwd(), "../vault-mind.yaml"),
   ];
   for (const p of candidates) {
-    if (existsSync(p)) return parseSimpleYaml(readFileSync(p, "utf-8"));
+    if (existsSync(p)) return { ...parseSimpleYaml(readFileSync(p, "utf-8")), config_path: p };
   }
   const vaultPath = process.env.VAULT_MIND_VAULT_PATH || process.env.VAULT_BRIDGE_VAULT || "";
   if (!vaultPath) throw new Error("No vault-mind.yaml found and VAULT_MIND_VAULT_PATH not set");
-  return { vault_path: vaultPath, auth_token: process.env.VAULT_MIND_AUTH_TOKEN };
+  return {
+    vault_path: vaultPath,
+    auth_token: process.env.VAULT_MIND_AUTH_TOKEN,
+    config_path: undefined,
+  };
 }
 
 function parseSimpleYaml(raw: string): VaultMindConfig {
@@ -518,13 +527,72 @@ function makeQueryDispatch(registry: AdapterRegistry) {
   };
 }
 
-function dispatchAgent(method: string, _params: Record<string, unknown>): unknown {
-  switch (method) {
-    case "agent.status": case "agent.trigger": case "agent.schedule": case "agent.history":
-      return stubResult("agent", method);
-    default:
-      throw err(-32601, `Unknown method: ${method}`);
-  }
+function makeAgentDispatch(vaultPath: string, compilerPath: string, python: string) {
+  return async (method: string, params: Record<string, unknown>): Promise<unknown> => {
+    const evaluatePy = resolve(compilerPath, "evaluate.py");
+
+    switch (method) {
+      case "agent.status": {
+        const args = [evaluatePy, "--status", "--vault", vaultPath];
+        const mode = params.mode as string | undefined;
+        if (mode) args.push("--mode", mode);
+        try {
+          const { stdout } = await exec(python, args, {
+            timeout: 30_000,
+            maxBuffer: 2 * 1024 * 1024,
+            env: { ...process.env },
+          });
+          return JSON.parse(stdout);
+        } catch (e) {
+          throw err(-32000, `agent.status failed: ${(e as Error).message}`);
+        }
+      }
+
+      case "agent.trigger": {
+        const action = params.action as string | undefined;
+        if (!action) throw err(-32602, "action required");
+        const validActions = ["compile", "emerge", "reconcile", "prune", "challenge"];
+        if (!validActions.includes(action)) {
+          throw err(-32602, `Unknown action: ${action}. Valid: ${validActions.join(", ")}`);
+        }
+        const args = [evaluatePy, "--trigger", action, "--vault", vaultPath];
+        const mode = params.mode as string | undefined;
+        if (mode) args.push("--mode", mode);
+        try {
+          const { stdout } = await exec(python, args, {
+            timeout: 300_000, // compile may take a while
+            maxBuffer: 10 * 1024 * 1024,
+            env: { ...process.env },
+          });
+          return JSON.parse(stdout);
+        } catch (e) {
+          throw err(-32000, `agent.trigger failed: ${(e as Error).message}`);
+        }
+      }
+
+      case "agent.schedule":
+        return { status: "not_implemented", message: "agent.schedule is Phase 6 work" };
+
+      case "agent.history": {
+        const args = [evaluatePy, "--history", "--vault", vaultPath];
+        const limit = params.limit as number | undefined;
+        if (limit !== undefined) args.push("--limit", String(limit));
+        try {
+          const { stdout } = await exec(python, args, {
+            timeout: 10_000,
+            maxBuffer: 2 * 1024 * 1024,
+            env: { ...process.env },
+          });
+          return JSON.parse(stdout);
+        } catch (e) {
+          throw err(-32000, `agent.history failed: ${(e as Error).message}`);
+        }
+      }
+
+      default:
+        throw err(-32601, `Unknown method: ${method}`);
+    }
+  };
 }
 
 function getToolDefinitions() {
@@ -606,6 +674,8 @@ async function main(): Promise<void> {
   const vaultFs = new VaultFs(config.vault_path);
   const queryDispatch = makeQueryDispatch(registry);
   const compileDispatch = makeCompileDispatch(compileTrigger);
+  const python = process.env.VAULT_MIND_PYTHON ?? process.env.PYTHON ?? "python";
+  const agentDispatch = makeAgentDispatch(config.vault_path, compilerPath, python);
 
   const server = new Server(
     { name: "vault-mind", version: VERSION },
@@ -643,7 +713,7 @@ async function main(): Promise<void> {
       } else if (toolName.startsWith("query.")) {
         result = await queryDispatch(toolName, toolArgs);
       } else if (toolName.startsWith("agent.")) {
-        result = dispatchAgent(toolName, toolArgs);
+        result = await agentDispatch(toolName, toolArgs);
       } else {
         throw err(-32601, `Unknown tool: ${toolName}`);
       }
