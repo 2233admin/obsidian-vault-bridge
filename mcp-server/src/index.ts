@@ -1,27 +1,27 @@
 #!/usr/bin/env node
 /**
  * vault-mind MCP server -- stdio transport
- * Unified vault operations, compilation, and query via @modelcontextprotocol/sdk.
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import {
   readFileSync, existsSync, readdirSync, statSync,
-  rmSync, renameSync, mkdirSync,
+  writeFileSync, appendFileSync, rmSync, renameSync, mkdirSync,
 } from "node:fs";
-import { resolve, join, basename, extname, relative, dirname, sep } from "node:path";
+import { resolve, join, basename, extname, relative, dirname, posix } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { FilesystemAdapter } from "./adapters/filesystem.js";
+import { MemUAdapter } from "./adapters/memu.js";
+import { GitNexusAdapter } from "./adapters/gitnexus.js";
 import { AdapterRegistry } from "./adapters/registry.js";
+import { unifiedQuery } from "./unified-query.js";
+import { CompileTrigger } from "./compile-trigger.js";
+import type { VaultMindAdapter } from "./adapters/interface.js";
 
-// ---------------------------------------------------------------------------
 // Config
-// ---------------------------------------------------------------------------
 
 interface VaultMindConfig {
   vault_path: string;
@@ -35,9 +35,7 @@ function loadConfig(): VaultMindConfig {
     resolve(process.cwd(), "../vault-mind.yaml"),
   ];
   for (const p of candidates) {
-    if (existsSync(p)) {
-      return parseSimpleYaml(readFileSync(p, "utf-8"));
-    }
+    if (existsSync(p)) return parseSimpleYaml(readFileSync(p, "utf-8"));
   }
   const vaultPath = process.env.VAULT_MIND_VAULT_PATH || process.env.VAULT_BRIDGE_VAULT || "";
   if (!vaultPath) throw new Error("No vault-mind.yaml found and VAULT_MIND_VAULT_PATH not set");
@@ -64,43 +62,13 @@ function parseSimpleYaml(raw: string): VaultMindConfig {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Vault helpers
-// ---------------------------------------------------------------------------
+// Helpers
 
 const PROTECTED_DIRS = new Set([".obsidian", ".trash", ".git", "node_modules"]);
+const VERSION = "0.3.0";
 
-function resolveVaultPath(vaultPath: string, p: string): string {
-  const basePath = vaultPath.endsWith(sep) ? vaultPath : vaultPath + sep;
-  const resolved = join(vaultPath, p);
-  if (resolved !== vaultPath && !resolved.startsWith(basePath)) {
-    throw new Error(`Path traversal blocked: ${p}`);
-  }
-  return resolved;
-}
-
-function walkDir(dir: string): string[] {
-  const results: string[] = [];
-  if (!existsSync(dir)) return results;
-  for (const ent of readdirSync(dir, { withFileTypes: true })) {
-    const fullPath = join(dir, ent.name);
-    if (ent.isDirectory() && !PROTECTED_DIRS.has(ent.name)) {
-      results.push(...walkDir(fullPath));
-    } else if (ent.isFile()) {
-      results.push(fullPath);
-    }
-  }
-  return results;
-}
-
-function extractWikilinks(content: string): string[] {
-  const links: string[] = [];
-  const re = /\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(content)) !== null) {
-    links.push(m[1].trim());
-  }
-  return links;
+function err(code: number, message: string): { code: number; message: string } {
+  return { code, message };
 }
 
 function parseYamlValue(s: string): unknown {
@@ -113,543 +81,587 @@ function parseYamlValue(s: string): unknown {
   return s;
 }
 
-function parseFrontmatter(content: string): Record<string, unknown> {
-  const fm: Record<string, unknown> = {};
-  if (!content.startsWith("---")) return fm;
-  const end = content.indexOf("\n---", 3);
-  if (end === -1) return fm;
-  const block = content.slice(4, end);
-  let currentKey: string | null = null;
-  let inArray = false;
-  let arrayItems: unknown[] = [];
-  for (const line of block.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    if (inArray && trimmed.startsWith("- ")) {
-      arrayItems.push(parseYamlValue(trimmed.slice(2).trim()));
-      continue;
+// VaultFs -- filesystem operations
+
+class VaultFs {
+  private readonly vault: string;
+  constructor(vaultPath: string) { this.vault = resolve(vaultPath); }
+
+  resolve(p: string): string {
+    if (typeof p !== "string" || !p.trim()) throw err(-32602, "path required");
+    const normalized = p.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\//, "");
+    if (normalized.split("/").some((s) => s === ".." || s === "."))
+      throw err(-32602, "path traversal blocked");
+    const topSegment = normalized.split("/")[0];
+    if (PROTECTED_DIRS.has(topSegment)) throw err(-32602, `protected path: ${topSegment}`);
+    const full = resolve(this.vault, normalized);
+    if (!full.startsWith(this.vault)) throw err(-32602, "path escapes vault");
+    return full;
+  }
+
+  parseFrontmatter(content: string): Record<string, unknown> | null {
+    if (!content.startsWith("---")) return null;
+    const end = content.indexOf("\n---", 3);
+    if (end === -1) return null;
+    const block = content.slice(4, end);
+    const fm: Record<string, unknown> = {};
+    let currentKey: string | null = null;
+    let inArray = false;
+    let arrayItems: unknown[] = [];
+    for (const line of block.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      if (inArray && trimmed.startsWith("- ")) {
+        arrayItems.push(parseYamlValue(trimmed.slice(2).trim()));
+        continue;
+      }
+      if (inArray && currentKey) {
+        fm[currentKey] = arrayItems;
+        inArray = false;
+        arrayItems = [];
+      }
+      const colon = trimmed.indexOf(":");
+      if (colon === -1) continue;
+      const key = trimmed.slice(0, colon).trim();
+      const rawVal = trimmed.slice(colon + 1).trim();
+      currentKey = key;
+      if (rawVal === "") { inArray = true; arrayItems = []; continue; }
+      if (rawVal.startsWith("[") && rawVal.endsWith("]")) {
+        fm[key] = rawVal.slice(1, -1).split(",").map((s) => parseYamlValue(s.trim()));
+      } else {
+        fm[key] = parseYamlValue(rawVal);
+      }
     }
-    if (inArray && currentKey) {
-      fm[currentKey] = arrayItems;
-      inArray = false;
-      arrayItems = [];
+    if (inArray && currentKey) fm[currentKey] = arrayItems;
+    return fm;
+  }
+
+  parseWikilinks(content: string): Array<{ link: string; displayText: string }> {
+    const links: Array<{ link: string; displayText: string }> = [];
+    const re = /\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(content)) !== null) {
+      links.push({ link: m[1], displayText: m[2] || m[1] });
     }
-    const colon = trimmed.indexOf(":");
-    if (colon === -1) continue;
-    const key = trimmed.slice(0, colon).trim();
-    const rawVal = trimmed.slice(colon + 1).trim();
-    currentKey = key;
-    if (rawVal === "") {
-      inArray = true;
-      arrayItems = [];
-      continue;
+    return links;
+  }
+
+  parseTags(content: string): string[] {
+    const cleaned = content.replace(/```[\s\S]*?```/g, "").replace(/`[^`]*`/g, "");
+    const tags: string[] = [];
+    const re = /(?:^|\s)#([a-zA-Z_一-鿿][\w/一-鿿-]*)/gm;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(cleaned)) !== null) { tags.push("#" + m[1]); }
+    return [...new Set(tags)];
+  }
+
+  parseHeadings(content: string): Array<{ heading: string; level: number; position: { line: number } }> {
+    const headings: Array<{ heading: string; level: number; position: { line: number } }> = [];
+    const lines = content.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const hm = lines[i].match(/^(#{1,6})\s+(.+)/);
+      if (hm) headings.push({ heading: hm[2].trim(), level: hm[1].length, position: { line: i } });
     }
-    if (rawVal.startsWith("[") && rawVal.endsWith("]")) {
-      fm[key] = rawVal.slice(1, -1).split(",").map((s) => parseYamlValue(s.trim()));
-    } else {
-      fm[key] = parseYamlValue(rawVal);
+    return headings;
+  }
+
+  walkMd(fn: (relPath: string, content: string) => void): void {
+    const walk = (d: string): void => {
+      for (const ent of readdirSync(d, { withFileTypes: true })) {
+        const full = join(d, ent.name);
+        if (ent.isDirectory() && !PROTECTED_DIRS.has(ent.name)) walk(full);
+        else if (ent.isFile() && ent.name.endsWith(".md")) {
+          const rel = relative(this.vault, full).replace(/\\/g, "/");
+          fn(rel, readFileSync(full, "utf-8"));
+        }
+      }
+    };
+    walk(this.vault);
+  }
+
+  matchGlob(p: string, glob: string): boolean {
+    const re = new RegExp(
+      "^" + glob.replace(/\*\*/g, ".*").replace(/\*/g, "[^/]*").replace(/\?/g, ".") + "$",
+    );
+    return re.test(p);
+  }
+
+  dispatch(method: string, p: Record<string, unknown>): unknown {
+    switch (method) {
+      case "vault.read": {
+        const full = this.resolve(p.path as string);
+        if (!existsSync(full)) throw err(-32001, `Not found: ${p.path}`);
+        return { content: readFileSync(full, "utf-8") };
+      }
+      case "vault.exists":
+        return { exists: existsSync(this.resolve(p.path as string)) };
+      case "vault.list": {
+        const dir = this.resolve((p.path as string) || "");
+        if (!existsSync(dir)) throw err(-32001, `Not found: ${p.path}`);
+        const hidden = new Set([".obsidian", ".trash", "node_modules"]);
+        const entries = readdirSync(dir, { withFileTypes: true }).filter((e) => !hidden.has(e.name));
+        return {
+          files: entries.filter((e) => e.isFile()).map((e) => posix.join((p.path as string) || "", e.name)).sort(),
+          folders: entries.filter((e) => e.isDirectory()).map((e) => posix.join((p.path as string) || "", e.name)).sort(),
+        };
+      }
+      case "vault.stat": {
+        const full = this.resolve(p.path as string);
+        if (!existsSync(full)) throw err(-32001, `Not found: ${p.path}`);
+        const st = statSync(full);
+        if (st.isDirectory())
+          return { type: "folder", path: p.path, name: basename(p.path as string), children: readdirSync(full).length };
+        return {
+          type: "file", path: p.path, name: basename(p.path as string),
+          ext: extname(p.path as string).slice(1), size: st.size, ctime: st.ctimeMs, mtime: st.mtimeMs,
+        };
+      }
+      case "vault.create": {
+        const full = this.resolve(p.path as string);
+        if (existsSync(full)) throw err(-32002, `Already exists: ${p.path}`);
+        if (p.dryRun !== false) return { dryRun: true, action: "create", path: p.path };
+        mkdirSync(dirname(full), { recursive: true });
+        writeFileSync(full, (p.content as string) || "", "utf-8");
+        return { ok: true, path: p.path };
+      }
+      case "vault.modify": {
+        const full = this.resolve(p.path as string);
+        if (!existsSync(full)) throw err(-32001, `Not found: ${p.path}`);
+        if (p.dryRun !== false) return { dryRun: true, action: "modify", path: p.path };
+        writeFileSync(full, p.content as string, "utf-8");
+        return { ok: true, path: p.path };
+      }
+      case "vault.append": {
+        const full = this.resolve(p.path as string);
+        if (!existsSync(full)) throw err(-32001, `Not found: ${p.path}`);
+        if (p.dryRun !== false) return { dryRun: true, action: "append", path: p.path };
+        appendFileSync(full, p.content as string, "utf-8");
+        return { ok: true, path: p.path };
+      }
+      case "vault.delete": {
+        const full = this.resolve(p.path as string);
+        if (!existsSync(full)) throw err(-32001, `Not found: ${p.path}`);
+        if (p.dryRun !== false) return { dryRun: true, action: "delete", path: p.path };
+        rmSync(full, { recursive: true });
+        return { ok: true, path: p.path };
+      }
+      case "vault.rename": {
+        const from = this.resolve(p.from as string);
+        const to = this.resolve(p.to as string);
+        if (!existsSync(from)) throw err(-32001, `Not found: ${p.from}`);
+        if (existsSync(to)) throw err(-32002, `Already exists: ${p.to}`);
+        if (p.dryRun !== false) return { dryRun: true, action: "rename", from: p.from, to: p.to };
+        mkdirSync(dirname(to), { recursive: true });
+        renameSync(from, to);
+        return { ok: true, from: p.from, to: p.to };
+      }
+      case "vault.search": {
+        if (typeof p.query !== "string" || (p.query as string).length > 500)
+          throw err(-32602, "query must be a string under 500 chars");
+        const results: Array<{ path: string; matches: Array<{ line: number; text: string }> }> = [];
+        const max = (p.maxResults as number) || 50;
+        let total = 0;
+        const flags = p.caseSensitive ? "g" : "gi";
+        const escaped = p.regex
+          ? (p.query as string)
+          : (p.query as string).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const pattern = new RegExp(escaped, flags);
+        this.walkMd((relPath, content) => {
+          if (total >= max) return;
+          if (p.glob && !this.matchGlob(relPath, p.glob as string)) return;
+          const lines = content.split("\n");
+          const matches: Array<{ line: number; text: string }> = [];
+          for (let i = 0; i < lines.length && total < max; i++) {
+            pattern.lastIndex = 0;
+            if (pattern.test(lines[i])) {
+              matches.push({ line: i + 1, text: lines[i] });
+              total++;
+            }
+          }
+          if (matches.length) results.push({ path: relPath, matches });
+        });
+        return { results, totalMatches: total };
+      }
+      case "vault.searchByTag": {
+        if (!p.tag) throw err(-32602, "tag required");
+        const bare = (p.tag as string).startsWith("#") ? (p.tag as string).slice(1) : (p.tag as string);
+        const hashTag = "#" + bare;
+        const files: string[] = [];
+        this.walkMd((relPath, content) => {
+          const tags = this.parseTags(content);
+          if (tags.includes(hashTag)) { files.push(relPath); return; }
+          const fm = this.parseFrontmatter(content);
+          const fmTags = (fm as Record<string, unknown> | null)?.tags ?? (fm as Record<string, unknown> | null)?.tag;
+          if (Array.isArray(fmTags) && fmTags.includes(bare)) files.push(relPath);
+          else if (typeof fmTags === "string" && fmTags === bare) files.push(relPath);
+        });
+        return { files: files.sort() };
+      }
+      case "vault.searchByFrontmatter": {
+        if (!p.key) throw err(-32602, "key required");
+        const op = (p.op as string) || "eq";
+        const validOps = ["eq", "ne", "gt", "lt", "gte", "lte", "contains", "regex", "exists"];
+        if (!validOps.includes(op)) throw err(-32602, `Unknown op: ${op}`);
+        const results: Array<{ path: string; value: unknown }> = [];
+        this.walkMd((relPath, content) => {
+          const fm = this.parseFrontmatter(content);
+          if (!fm) return;
+          if (op === "exists") {
+            if ((p.key as string) in fm) results.push({ path: relPath, value: fm[p.key as string] });
+            return;
+          }
+          if (!((p.key as string) in fm)) return;
+          const v = fm[p.key as string];
+          let match = false;
+          switch (op) {
+            case "eq": match = v === p.value; break;
+            case "ne": match = v !== p.value; break;
+            case "gt": match = typeof v === "number" && typeof p.value === "number" && v > p.value; break;
+            case "lt": match = typeof v === "number" && typeof p.value === "number" && v < p.value; break;
+            case "gte": match = typeof v === "number" && typeof p.value === "number" && v >= p.value; break;
+            case "lte": match = typeof v === "number" && typeof p.value === "number" && v <= p.value; break;
+            case "contains": match = typeof v === "string" && typeof p.value === "string" && v.includes(p.value); break;
+            case "regex":
+              try { match = typeof v === "string" && typeof p.value === "string" && new RegExp(p.value).test(v); }
+              catch { match = false; }
+              break;
+          }
+          if (match) results.push({ path: relPath, value: v });
+        });
+        return { files: results.sort((a, b) => a.path.localeCompare(b.path)) };
+      }
+      case "vault.graph": {
+        const nodeSet = new Set<string>();
+        const edgeMap = new Map<string, number>();
+        const inbound = new Set<string>();
+        this.walkMd((relPath, content) => {
+          nodeSet.add(relPath);
+          for (const l of this.parseWikilinks(content)) {
+            if (l.link.startsWith("#")) continue;
+            let target = l.link.split("#")[0];
+            if (!target) continue;
+            if (!target.includes("/")) {
+              const withMd = target.endsWith(".md") ? target : target + ".md";
+              try { if (existsSync(this.resolve(withMd))) target = withMd; } catch {}
+            }
+            if (!target.endsWith(".md")) target += ".md";
+            nodeSet.add(target);
+            inbound.add(target);
+            const key = relPath + " " + target;
+            edgeMap.set(key, (edgeMap.get(key) || 0) + 1);
+          }
+        });
+        const edges = Array.from(edgeMap.entries()).map(([key, count]) => {
+          const [from, to] = key.split(" ");
+          return { from, to, count };
+        });
+        const nodes = Array.from(nodeSet).sort().map((np) => ({
+          path: np, exists: (() => { try { return existsSync(this.resolve(np)); } catch { return false; } })(),
+        }));
+        const orphans = nodes.filter((n) => n.exists && n.path.endsWith(".md") && !inbound.has(n.path)).map((n) => n.path);
+        return { nodes, edges, orphans };
+      }
+      case "vault.backlinks": {
+        if (!p.path) throw err(-32602, "path required");
+        const target = (p.path as string).endsWith(".md") ? (p.path as string) : (p.path as string) + ".md";
+        const targetBase = basename(target, ".md");
+        const results: Array<{ from: string; count: number }> = [];
+        this.walkMd((relPath, content) => {
+          if (relPath === target) return;
+          let count = 0;
+          for (const l of this.parseWikilinks(content)) {
+            const linkPath = l.link.split("#")[0];
+            if (!linkPath) continue;
+            if (linkPath === target || linkPath === targetBase || linkPath + ".md" === target) count++;
+          }
+          if (count > 0) results.push({ from: relPath, count });
+        });
+        return { backlinks: results.sort((a, b) => a.from.localeCompare(b.from)) };
+      }
+      case "vault.batch": {
+        if (!Array.isArray(p.operations)) throw err(-32602, "operations must be an array");
+        type BatchOp = { method: string; params?: Record<string, unknown> };
+        const ops = p.operations as BatchOp[];
+        const results: Array<{ index: number; ok: boolean; result?: unknown; error?: { code: number; message: string } }> = [];
+        let succeeded = 0;
+        let failed = 0;
+        for (let i = 0; i < ops.length; i++) {
+          const op = ops[i];
+          if (!op.method?.startsWith("vault.")) throw err(-32602, `Batch only supports vault.* methods (index ${i})`);
+          if (op.method === "vault.batch") throw err(-32602, "Recursive batch not allowed");
+          try {
+            const params = { ...(op.params || {}) };
+            if (p.dryRun !== undefined) params.dryRun = p.dryRun;
+            const result = this.dispatch(op.method, params);
+            results.push({ index: i, ok: true, result });
+            succeeded++;
+          } catch (e: unknown) {
+            const ex = e as { code?: number; message?: string };
+            results.push({ index: i, ok: false, error: { code: ex.code || -32000, message: ex.message || String(e) } });
+            failed++;
+          }
+        }
+        return { results, summary: { total: ops.length, succeeded, failed } };
+      }
+      case "vault.lint": {
+        const requiredFm = Array.isArray(p.requiredFrontmatter) ? (p.requiredFrontmatter as string[]) : [];
+        const allFiles: Array<{ path: string; size: number; content: string }> = [];
+        const linkMap = new Map<string, Map<string, number>>();
+        const inbound = new Set<string>();
+        this.walkMd((relPath, content) => {
+          const st = statSync(this.resolve(relPath));
+          allFiles.push({ path: relPath, size: st.size, content });
+          const targets = new Map<string, number>();
+          for (const l of this.parseWikilinks(content)) {
+            const t = l.link.endsWith(".md") ? l.link : l.link + ".md";
+            targets.set(t, (targets.get(t) || 0) + 1);
+          }
+          linkMap.set(relPath, targets);
+          for (const t of targets.keys()) inbound.add(t);
+        });
+        const orphans = allFiles.filter((fi) => !inbound.has(fi.path)).map((fi) => fi.path).sort();
+        const brokenLinks: Array<{ from: string; to: string }> = [];
+        for (const [from, targets] of linkMap) {
+          for (const [to] of targets) {
+            try { if (!existsSync(this.resolve(to))) brokenLinks.push({ from, to }); } catch { brokenLinks.push({ from, to }); }
+          }
+        }
+        const emptyFiles = allFiles.filter((fi) => fi.size === 0).map((fi) => fi.path).sort();
+        const missingFm: Array<{ path: string; missing: string[] }> = [];
+        if (requiredFm.length > 0) {
+          for (const fi of allFiles) {
+            const fm = this.parseFrontmatter(fi.content) || {};
+            const missing = requiredFm.filter((k) => !(k in fm));
+            if (missing.length > 0) missingFm.push({ path: fi.path, missing });
+          }
+        }
+        const titleMap = new Map<string, string[]>();
+        for (const fi of allFiles) {
+          const t = basename(fi.path, ".md").toLowerCase();
+          const arr = titleMap.get(t) || [];
+          arr.push(fi.path);
+          titleMap.set(t, arr);
+        }
+        const duplicates = Array.from(titleMap.entries())
+          .filter(([, paths]) => paths.length > 1)
+          .map(([title, files]) => ({ title, files: files.sort() }));
+        let totalLinks = 0;
+        for (const targets of linkMap.values()) for (const c of targets.values()) totalLinks += c;
+        return {
+          orphans, brokenLinks, emptyFiles, missingFrontmatter: missingFm, duplicateTitles: duplicates,
+          stats: {
+            totalFiles: allFiles.length, totalLinks, totalOrphans: orphans.length,
+            totalBroken: brokenLinks.length, totalEmpty: emptyFiles.length, totalDuplicates: duplicates.length,
+          },
+        };
+      }
+      default:
+        throw err(-32601, `Unknown method: ${method}`);
     }
   }
-  if (inArray && currentKey) fm[currentKey] = arrayItems;
-  return fm;
 }
 
-function wikilinkToPath(link: string): string {
-  const withExt = link.endsWith(".md") ? link : link + ".md";
-  return withExt.replace(/\\/g, "/");
+// Stub namespaces
+
+function stubResult(ns: string, method: string): unknown {
+  return { status: "not_implemented", namespace: ns, method };
 }
 
-// ---------------------------------------------------------------------------
-// Tool definitions
-// ---------------------------------------------------------------------------
-
-const TOOLS = [
-  {
-    name: "vault.read",
-    description: "Read a file from the vault.",
-    inputSchema: {
-      type: "object",
-      properties: { path: { type: "string" } },
-      required: ["path"],
-    },
-  },
-  {
-    name: "vault.create",
-    description: "Create a new file in the vault. Fails if the file already exists.",
-    inputSchema: {
-      type: "object",
-      properties: { path: { type: "string" }, content: { type: "string" } },
-      required: ["path", "content"],
-    },
-  },
-  {
-    name: "vault.modify",
-    description: "Overwrite an existing file in the vault.",
-    inputSchema: {
-      type: "object",
-      properties: { path: { type: "string" }, content: { type: "string" } },
-      required: ["path", "content"],
-    },
-  },
-  {
-    name: "vault.append",
-    description: "Append content to a file. Creates the file if it does not exist.",
-    inputSchema: {
-      type: "object",
-      properties: { path: { type: "string" }, content: { type: "string" } },
-      required: ["path", "content"],
-    },
-  },
-  {
-    name: "vault.delete",
-    description: "Delete a file from the vault.",
-    inputSchema: {
-      type: "object",
-      properties: { path: { type: "string" } },
-      required: ["path"],
-    },
-  },
-  {
-    name: "vault.rename",
-    description: "Rename or move a file within the vault.",
-    inputSchema: {
-      type: "object",
-      properties: { oldPath: { type: "string" }, newPath: { type: "string" } },
-      required: ["oldPath", "newPath"],
-    },
-  },
-  {
-    name: "vault.search",
-    description: "Full-text search across vault files.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        query: { type: "string" },
-        glob: { type: "string" },
-        maxResults: { type: "number" },
-        caseSensitive: { type: "boolean" },
-        context: { type: "number" },
-      },
-      required: ["query"],
-    },
-  },
-  {
-    name: "vault.searchByTag",
-    description: "Find notes that have a specific tag in their YAML frontmatter.",
-    inputSchema: {
-      type: "object",
-      properties: { tag: { type: "string" } },
-      required: ["tag"],
-    },
-  },
-  {
-    name: "vault.searchByFrontmatter",
-    description: "Find notes where a frontmatter key contains a value.",
-    inputSchema: {
-      type: "object",
-      properties: { key: { type: "string" }, value: { type: "string" } },
-      required: ["key", "value"],
-    },
-  },
-  {
-    name: "vault.graph",
-    description: "Build a wikilink graph of all .md files. Returns nodes and edges.",
-    inputSchema: { type: "object", properties: {} },
-  },
-  {
-    name: "vault.backlinks",
-    description: "Find all files that link to the given path via wikilinks.",
-    inputSchema: {
-      type: "object",
-      properties: { path: { type: "string" } },
-      required: ["path"],
-    },
-  },
-  {
-    name: "vault.batch",
-    description: "Execute an array of vault operations sequentially.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        operations: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: { tool: { type: "string" }, args: { type: "object" } },
-            required: ["tool", "args"],
-          },
-        },
-      },
-      required: ["operations"],
-    },
-  },
-  {
-    name: "vault.lint",
-    description: "Check vault for broken wikilinks, orphan files, and missing frontmatter.",
-    inputSchema: { type: "object", properties: {} },
-  },
-  {
-    name: "vault.list",
-    description: "List files and directories within a vault path.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        path: { type: "string" },
-        recursive: { type: "boolean" },
-      },
-    },
-  },
-  {
-    name: "vault.stat",
-    description: "Get metadata (size, mtime, type) for a vault path.",
-    inputSchema: {
-      type: "object",
-      properties: { path: { type: "string" } },
-      required: ["path"],
-    },
-  },
-  {
-    name: "vault.exists",
-    description: "Check whether a path exists in the vault.",
-    inputSchema: {
-      type: "object",
-      properties: { path: { type: "string" } },
-      required: ["path"],
-    },
-  },
-  {
-    name: "compile.run",
-    description: "Run the KB compiler pipeline (stub).",
-    inputSchema: { type: "object", properties: { target: { type: "string" } } },
-  },
-  {
-    name: "query.semantic",
-    description: "Semantic search over compiled embeddings (stub).",
-    inputSchema: {
-      type: "object",
-      properties: { query: { type: "string" }, topK: { type: "number" } },
-      required: ["query"],
-    },
-  },
-  {
-    name: "agent.status",
-    description: "Get the status of running agent tasks (stub).",
-    inputSchema: { type: "object", properties: {} },
-  },
-];
-
-// ---------------------------------------------------------------------------
-// Response helpers
-// ---------------------------------------------------------------------------
-
-function ok(data: unknown) {
-  return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
-}
-
-function toolErr(message: string) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify({ error: message }) }],
-    isError: true,
+function makeCompileDispatch(trigger: CompileTrigger) {
+  return async (method: string, params: Record<string, unknown>): Promise<unknown> => {
+    switch (method) {
+      case "compile.status":
+        return trigger.status();
+      case "compile.run":
+        return trigger.run(params.topic as string | undefined);
+      case "compile.diff":
+        // diff is just the dirty list
+        return { dirty: trigger.status().dirty };
+      case "compile.abort":
+        return trigger.abort();
+      default:
+        throw err(-32601, `Unknown method: ${method}`);
+    }
   };
 }
 
-// ---------------------------------------------------------------------------
-// Dispatch
-// ---------------------------------------------------------------------------
-
-async function dispatch(
-  tool: string,
-  args: Record<string, unknown>,
-  vaultPath: string,
-  registry: AdapterRegistry,
-): Promise<ReturnType<typeof ok>> {
-  const fs = registry.getDefault();
-
-  switch (tool) {
-    case "vault.read": {
-      const path = String(args["path"]);
-      const content = await fs.read!(path);
-      return ok({ path, content });
-    }
-
-    case "vault.create": {
-      const path = String(args["path"]);
-      const content = String(args["content"]);
-      const fullPath = resolveVaultPath(vaultPath, path);
-      if (existsSync(fullPath)) throw new Error(`File already exists: ${path}`);
-      mkdirSync(dirname(fullPath), { recursive: true });
-      await fs.write!(path, content);
-      return ok({ path, created: true });
-    }
-
-    case "vault.modify": {
-      const path = String(args["path"]);
-      const content = String(args["content"]);
-      const fullPath = resolveVaultPath(vaultPath, path);
-      if (!existsSync(fullPath)) throw new Error(`File not found: ${path}`);
-      await fs.write!(path, content);
-      return ok({ path, modified: true });
-    }
-
-    case "vault.append": {
-      const path = String(args["path"]);
-      const content = String(args["content"]);
-      const fullPath = resolveVaultPath(vaultPath, path);
-      mkdirSync(dirname(fullPath), { recursive: true });
-      const existing = existsSync(fullPath) ? await fs.read!(path) : "";
-      await fs.write!(path, existing + content);
-      return ok({ path, appended: true });
-    }
-
-    case "vault.delete": {
-      const path = String(args["path"]);
-      const fullPath = resolveVaultPath(vaultPath, path);
-      if (!existsSync(fullPath)) throw new Error(`Path not found: ${path}`);
-      rmSync(fullPath, { recursive: false });
-      return ok({ path, deleted: true });
-    }
-
-    case "vault.rename": {
-      const oldPath = String(args["oldPath"]);
-      const newPath = String(args["newPath"]);
-      const fullOld = resolveVaultPath(vaultPath, oldPath);
-      const fullNew = resolveVaultPath(vaultPath, newPath);
-      if (!existsSync(fullOld)) throw new Error(`Source not found: ${oldPath}`);
-      if (existsSync(fullNew)) throw new Error(`Destination already exists: ${newPath}`);
-      mkdirSync(dirname(fullNew), { recursive: true });
-      renameSync(fullOld, fullNew);
-      return ok({ oldPath, newPath, renamed: true });
-    }
-
-    case "vault.search": {
-      const query = String(args["query"]);
-      const results = await fs.search!(query, {
-        glob: args["glob"] != null ? String(args["glob"]) : undefined,
-        maxResults: args["maxResults"] != null ? Number(args["maxResults"]) : 20,
-        caseSensitive: Boolean(args["caseSensitive"]),
-        context: args["context"] != null ? Number(args["context"]) : 0,
-      });
-      return ok({ query, results });
-    }
-
-    case "vault.searchByTag": {
-      const tag = String(args["tag"]).replace(/^#/, "");
-      const matches: Array<{ path: string; tags: unknown[] }> = [];
-      for (const absPath of walkDir(vaultPath).filter((f) => extname(f) === ".md")) {
-        const content = readFileSync(absPath, "utf-8");
-        const fm = parseFrontmatter(content);
-        const rawTags = fm["tags"];
-        let tags: string[] = [];
-        if (Array.isArray(rawTags)) {
-          tags = rawTags.map((t) => String(t).replace(/^#/, "").trim());
-        } else if (typeof rawTags === "string") {
-          tags = rawTags
-            .replace(/[\[\]]/g, "")
-            .split(/[,\s]+/)
-            .map((t) => t.replace(/^#/, "").trim())
-            .filter(Boolean);
-        }
-        if (tags.includes(tag)) {
-          matches.push({ path: relative(vaultPath, absPath).replace(/\\/g, "/"), tags });
-        }
-      }
-      return ok({ tag, matches });
-    }
-
-    case "vault.searchByFrontmatter": {
-      const key = String(args["key"]);
-      const value = String(args["value"]);
-      const matches: Array<{ path: string; frontmatter: Record<string, unknown> }> = [];
-      for (const absPath of walkDir(vaultPath).filter((f) => extname(f) === ".md")) {
-        const content = readFileSync(absPath, "utf-8");
-        const fm = parseFrontmatter(content);
-        if (fm[key] !== undefined && String(fm[key]).includes(value)) {
-          matches.push({ path: relative(vaultPath, absPath).replace(/\\/g, "/"), frontmatter: fm });
-        }
-      }
-      return ok({ key, value, matches });
-    }
-
-    case "vault.graph": {
-      const mdFiles = walkDir(vaultPath).filter((f) => extname(f) === ".md");
-      const pathSet = new Set(mdFiles.map((f) => relative(vaultPath, f).replace(/\\/g, "/")));
-      const nodes: Array<{ path: string; title: string }> = [];
-      const edges: Array<{ from: string; to: string; type: "link" }> = [];
-      for (const absPath of mdFiles) {
-        const relPath = relative(vaultPath, absPath).replace(/\\/g, "/");
-        const content = readFileSync(absPath, "utf-8");
-        const fm = parseFrontmatter(content);
-        nodes.push({ path: relPath, title: fm["title"] != null ? String(fm["title"]) : basename(absPath, ".md") });
-        for (const link of extractWikilinks(content)) {
-          const target = wikilinkToPath(link);
-          if (pathSet.has(target)) edges.push({ from: relPath, to: target, type: "link" });
-        }
-      }
-      return ok({ nodes, edges });
-    }
-
-    case "vault.backlinks": {
-      const targetPath = String(args["path"]).replace(/\\/g, "/");
-      const targetStem = basename(targetPath, ".md");
-      const backlinks: string[] = [];
-      for (const absPath of walkDir(vaultPath).filter((f) => extname(f) === ".md")) {
-        const relPath = relative(vaultPath, absPath).replace(/\\/g, "/");
-        if (relPath === targetPath) continue;
-        const content = readFileSync(absPath, "utf-8");
-        if (extractWikilinks(content).some((l) => l === targetStem || wikilinkToPath(l) === targetPath)) {
-          backlinks.push(relPath);
-        }
-      }
-      return ok({ path: targetPath, backlinks });
-    }
-
-    case "vault.batch": {
-      const operations = args["operations"] as Array<{ tool: string; args: Record<string, unknown> }>;
-      if (!Array.isArray(operations)) throw new Error("operations must be an array");
-      const results: unknown[] = [];
-      for (const op of operations) {
-        try {
-          const result = await dispatch(op.tool, op.args, vaultPath, registry);
-          results.push({ ok: true, result: JSON.parse(result.content[0].text) });
-        } catch (e: unknown) {
-          results.push({ ok: false, error: e instanceof Error ? e.message : String(e) });
-        }
-      }
-      return ok({ results });
-    }
-
-    case "vault.lint": {
-      const mdFiles = walkDir(vaultPath).filter((f) => extname(f) === ".md");
-      const pathSet = new Set(mdFiles.map((f) => relative(vaultPath, f).replace(/\\/g, "/")));
-      const linkedFiles = new Set<string>();
-      const brokenLinks: Array<{ file: string; link: string }> = [];
-      const missingFrontmatter: string[] = [];
-      for (const absPath of mdFiles) {
-        const relPath = relative(vaultPath, absPath).replace(/\\/g, "/");
-        const content = readFileSync(absPath, "utf-8");
-        if (Object.keys(parseFrontmatter(content)).length === 0) missingFrontmatter.push(relPath);
-        for (const link of extractWikilinks(content)) {
-          const target = wikilinkToPath(link);
-          linkedFiles.add(target);
-          if (!pathSet.has(target)) brokenLinks.push({ file: relPath, link });
-        }
-      }
-      const orphans = [...pathSet].filter(
-        (p) => !linkedFiles.has(p) && basename(p, ".md").toLowerCase() !== "index",
-      );
-      return ok({
-        totalFiles: walkDir(vaultPath).length,
-        mdFiles: mdFiles.length,
-        brokenLinks,
-        orphans,
-        missingFrontmatter,
-      });
-    }
-
-    case "vault.list": {
-      const dirPath = args["path"] != null ? String(args["path"]) : "";
-      const recursive = Boolean(args["recursive"]);
-      const fullDir = dirPath ? resolveVaultPath(vaultPath, dirPath) : vaultPath;
-      if (!existsSync(fullDir)) throw new Error(`Directory not found: ${dirPath || "/"}`);
-      let entries: Array<{ name: string; path: string; type: "file" | "directory"; size?: number }>;
-      if (recursive) {
-        entries = walkDir(fullDir).map((absPath) => ({
-          name: basename(absPath),
-          path: relative(vaultPath, absPath).replace(/\\/g, "/"),
-          type: "file" as const,
-          size: statSync(absPath).size,
-        }));
-      } else {
-        entries = readdirSync(fullDir, { withFileTypes: true }).map((d) => {
-          const absPath = join(fullDir, d.name);
-          const type = d.isDirectory() ? ("directory" as const) : ("file" as const);
-          const entry: { name: string; path: string; type: "file" | "directory"; size?: number } = {
-            name: d.name,
-            path: relative(vaultPath, absPath).replace(/\\/g, "/"),
-            type,
-          };
-          if (type === "file") entry.size = statSync(absPath).size;
-          return entry;
+function makeQueryDispatch(registry: AdapterRegistry) {
+  return async (method: string, params: Record<string, unknown>): Promise<unknown> => {
+    switch (method) {
+      case "query.unified": {
+        const query = params.query as string;
+        if (!query) throw err(-32602, "query required");
+        return unifiedQuery(registry, query, {
+          maxResults: (params.maxResults as number) ?? 50,
+          adapters: params.adapters as string[] | undefined,
+          weights: params.weights as Record<string, number> | undefined,
         });
       }
-      return ok({ path: dirPath || "/", entries });
+      case "query.search": {
+        // query.search is an alias for query.unified with filesystem-only
+        const query = params.query as string;
+        if (!query) throw err(-32602, "query required");
+        return unifiedQuery(registry, query, {
+          maxResults: (params.maxResults as number) ?? 50,
+          adapters: ["filesystem"],
+        });
+      }
+      case "query.explain": {
+        // explain: search for concept, return top results with context
+        const concept = params.concept as string;
+        if (!concept) throw err(-32602, "concept required");
+        return unifiedQuery(registry, concept, { maxResults: 10, context: 3 });
+      }
+      default:
+        throw err(-32601, `Unknown method: ${method}`);
     }
+  };
+}
 
-    case "vault.stat": {
-      const path = String(args["path"]);
-      const fullPath = resolveVaultPath(vaultPath, path);
-      if (!existsSync(fullPath)) throw new Error(`Path not found: ${path}`);
-      const st = statSync(fullPath);
-      return ok({
-        path,
-        type: st.isDirectory() ? "directory" : "file",
-        size: st.size,
-        mtime: st.mtime.toISOString(),
-        ctime: st.ctime.toISOString(),
-      });
-    }
-
-    case "vault.exists": {
-      const path = String(args["path"]);
-      return ok({ path, exists: existsSync(resolveVaultPath(vaultPath, path)) });
-    }
-
-    case "compile.run":
-      return ok({ status: "not_implemented", message: "compile.run is a stub" });
-
-    case "query.semantic":
-      return ok({ status: "not_implemented", message: "query.semantic is a stub" });
-
-    case "agent.status":
-      return ok({ status: "not_implemented", message: "agent.status is a stub" });
-
+function dispatchAgent(method: string, _params: Record<string, unknown>): unknown {
+  switch (method) {
+    case "agent.status": case "agent.trigger": case "agent.schedule": case "agent.history":
+      return stubResult("agent", method);
     default:
-      throw new Error(`Unknown tool: ${tool}`);
+      throw err(-32601, `Unknown method: ${method}`);
   }
 }
 
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
+function getToolDefinitions() {
+  return [
+    { name: "vault.read", description: "Read a note", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
+    { name: "vault.create", description: "Create a new note (dry-run default)", inputSchema: { type: "object", properties: { path: { type: "string" }, content: { type: "string" }, dryRun: { type: "boolean", default: true } }, required: ["path"] } },
+    { name: "vault.modify", description: "Overwrite an existing note", inputSchema: { type: "object", properties: { path: { type: "string" }, content: { type: "string" }, dryRun: { type: "boolean", default: true } }, required: ["path", "content"] } },
+    { name: "vault.append", description: "Append content to a note", inputSchema: { type: "object", properties: { path: { type: "string" }, content: { type: "string" }, dryRun: { type: "boolean", default: true } }, required: ["path", "content"] } },
+    { name: "vault.delete", description: "Delete a note or folder", inputSchema: { type: "object", properties: { path: { type: "string" }, dryRun: { type: "boolean", default: true } }, required: ["path"] } },
+    { name: "vault.rename", description: "Rename or move a file", inputSchema: { type: "object", properties: { from: { type: "string" }, to: { type: "string" }, dryRun: { type: "boolean", default: true } }, required: ["from", "to"] } },
+    { name: "vault.search", description: "Fulltext search across vault", inputSchema: { type: "object", properties: { query: { type: "string" }, regex: { type: "boolean" }, caseSensitive: { type: "boolean" }, maxResults: { type: "integer", default: 50 }, glob: { type: "string" } }, required: ["query"] } },
+    { name: "vault.searchByTag", description: "Find notes with a given tag", inputSchema: { type: "object", properties: { tag: { type: "string" } }, required: ["tag"] } },
+    { name: "vault.searchByFrontmatter", description: "Find notes by frontmatter key-value", inputSchema: { type: "object", properties: { key: { type: "string" }, value: {}, op: { type: "string", default: "eq" } }, required: ["key"] } },
+    { name: "vault.graph", description: "Get the link graph of the vault", inputSchema: { type: "object", properties: { type: { type: "string", default: "both" } } } },
+    { name: "vault.backlinks", description: "Find notes that link to a note", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
+    { name: "vault.batch", description: "Execute multiple vault operations", inputSchema: { type: "object", properties: { operations: { type: "array" }, dryRun: { type: "boolean" } }, required: ["operations"] } },
+    { name: "vault.lint", description: "Check vault health", inputSchema: { type: "object", properties: { requiredFrontmatter: { type: "array", items: { type: "string" } } } } },
+    { name: "vault.list", description: "List files and folders", inputSchema: { type: "object", properties: { path: { type: "string", default: "" } } } },
+    { name: "vault.stat", description: "Get file or folder metadata", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
+    { name: "vault.exists", description: "Check if a path exists", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
+    { name: "compile.status", description: "Get compilation status", inputSchema: { type: "object", properties: {} } },
+    { name: "compile.run", description: "Run compilation", inputSchema: { type: "object", properties: { topic: { type: "string" } } } },
+    { name: "compile.diff", description: "Show compilation diff", inputSchema: { type: "object", properties: { topic: { type: "string" } } } },
+    { name: "compile.abort", description: "Abort running compilation", inputSchema: { type: "object", properties: {} } },
+    { name: "query.unified", description: "Unified knowledge query", inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } },
+    { name: "query.search", description: "Search knowledge base", inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } },
+    { name: "query.explain", description: "Explain a concept", inputSchema: { type: "object", properties: { concept: { type: "string" } }, required: ["concept"] } },
+    { name: "agent.status", description: "Get agent status", inputSchema: { type: "object", properties: {} } },
+    { name: "agent.trigger", description: "Trigger an agent action", inputSchema: { type: "object", properties: { action: { type: "string" } }, required: ["action"] } },
+    { name: "agent.schedule", description: "Schedule an agent task", inputSchema: { type: "object", properties: { task: { type: "string" }, cron: { type: "string" } }, required: ["task"] } },
+    { name: "agent.history", description: "Get agent action history", inputSchema: { type: "object", properties: { limit: { type: "integer", default: 20 } } } },
+  ];
+}
 
-async function main() {
+function checkAuth(config: VaultMindConfig, args: Record<string, unknown>): void {
+  if (!config.auth_token) return;
+  const provided = (args._auth_token as string) || (args._token as string);
+  if (provided !== config.auth_token) {
+    throw err(-32403, "Authentication failed: invalid or missing token");
+  }
+}
+
+async function main(): Promise<void> {
   const config = loadConfig();
-  const vaultPath = resolve(config.vault_path);
 
-  if (!existsSync(vaultPath)) throw new Error(`Vault path does not exist: ${vaultPath}`);
-
+  // --- Adapter registry ---
   const registry = new AdapterRegistry();
-  const fsAdapter = new FilesystemAdapter(vaultPath);
-  await fsAdapter.init();
-  registry.register(fsAdapter);
+
+  if (config.vault_path) {
+    const fsAdapter = new FilesystemAdapter(config.vault_path);
+    await fsAdapter.init();
+    registry.register(fsAdapter);
+  }
+
+  // Optional adapters -- init gracefully, don't block if unavailable
+  const enabledAdapters = new Set(config.adapters ?? ["filesystem", "memu", "gitnexus"]);
+
+  if (enabledAdapters.has("memu")) {
+    const memuAdapter = new MemUAdapter();
+    await memuAdapter.init();
+    if (memuAdapter.isAvailable) registry.register(memuAdapter);
+  }
+
+  if (enabledAdapters.has("gitnexus")) {
+    const gnAdapter = new GitNexusAdapter();
+    await gnAdapter.init();
+    if (gnAdapter.isAvailable) registry.register(gnAdapter);
+  }
+
+  // --- Compile trigger ---
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  const compilerPath = resolve(__dirname, "../../compiler");
+  const compileTrigger = new CompileTrigger({
+    vaultPath: config.vault_path,
+    compilerPath,
+  });
+
+  // --- Dispatchers ---
+  const vaultFs = new VaultFs(config.vault_path);
+  const queryDispatch = makeQueryDispatch(registry);
+  const compileDispatch = makeCompileDispatch(compileTrigger);
 
   const server = new Server(
-    { name: "vault-mind", version: "0.1.0" },
+    { name: "vault-mind", version: VERSION },
     { capabilities: { tools: {} } },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    return { tools: getToolDefinitions() };
+  });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args = {} } = request.params;
+    const toolName = request.params.name;
+    const toolArgs = (request.params.arguments || {}) as Record<string, unknown>;
 
-    if (config.auth_token) {
-      const token = (args as Record<string, unknown>)["_auth_token"];
-      if (token !== config.auth_token) return toolErr("Unauthorized: invalid or missing _auth_token");
+    try {
+      checkAuth(config, toolArgs);
+    } catch (e: unknown) {
+      const ex = e as { message?: string };
+      return { content: [{ type: "text" as const, text: `Error: ${ex.message}` }], isError: true };
     }
 
     try {
-      return await dispatch(name, args as Record<string, unknown>, vaultPath, registry);
+      let result: unknown;
+      if (toolName.startsWith("vault.")) {
+        result = vaultFs.dispatch(toolName, toolArgs);
+        // Hook write ops into compile trigger
+        if (toolName === "vault.create" || toolName === "vault.modify" || toolName === "vault.append") {
+          const path = toolArgs.path as string;
+          if (path && toolArgs.dryRun === false) {
+            compileTrigger.onFileChange(path, toolName === "vault.create" ? "create" : "modify");
+          }
+        }
+      } else if (toolName.startsWith("compile.")) {
+        result = await compileDispatch(toolName, toolArgs);
+      } else if (toolName.startsWith("query.")) {
+        result = await queryDispatch(toolName, toolArgs);
+      } else if (toolName.startsWith("agent.")) {
+        result = dispatchAgent(toolName, toolArgs);
+      } else {
+        throw err(-32601, `Unknown tool: ${toolName}`);
+      }
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
     } catch (e: unknown) {
-      return toolErr(e instanceof Error ? e.message : String(e));
+      const ex = e as { message?: string };
+      return { content: [{ type: "text" as const, text: `Error: ${ex.message || String(e)}` }], isError: true };
     }
   });
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
+
+  const adapterNames = registry.list().map((a) => a.name).join(", ");
+  process.stderr.write(`vault-mind: MCP server running (stdio, v${VERSION}, adapters: ${adapterNames})\n`);
 }
 
 main().catch((e) => {
-  process.stderr.write(`Fatal: ${e instanceof Error ? e.message : String(e)}\n`);
+  process.stderr.write("vault-mind: fatal: " + (e as Error).message + "\n");
   process.exit(1);
 });
