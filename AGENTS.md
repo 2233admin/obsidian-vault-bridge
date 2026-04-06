@@ -19,7 +19,7 @@ Add to your agent's MCP config:
   "mcpServers": {
     "vault-bridge": {
       "command": "node",
-      "args": ["/path/to/obsidian-vault-bridge/connector.js"]
+      "args": ["/path/to/obsidian-llm-wiki/connector.js"]
     }
   }
 }
@@ -57,7 +57,7 @@ These are deterministic. Do not use LLMs for them.
 ## Build
 
 ```bash
-cd /path/to/obsidian-vault-bridge
+cd /path/to/obsidian-llm-wiki
 npm run build    # esbuild -> main.js
 npm run dev      # watch mode
 ```

@@ -25,7 +25,7 @@ All vault operations go through MCP. Filesystem fallback when Obsidian is closed
 ## kb_meta.py (deterministic, zero LLM cost)
 
 ```
-KB_META = python /path/to/obsidian-vault-bridge/kb_meta.py
+KB_META = python /path/to/obsidian-llm-wiki/kb_meta.py
 $KB_META <command> <vault_root> <topic> [args...]
 ```
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// setup.js -- one-command installer for obsidian-vault-bridge
+// setup.js -- one-command installer for obsidian-llm-wiki
 // Usage: node setup.js
 // Zero npm dependencies: only Node.js built-ins (fs, path, os, readline)
 
@@ -323,7 +323,7 @@ ${C.bold}  Next steps:${C.reset}
 async function main() {
   console.log(`
 ${C.bold}${C.blue}  Vault Bridge Setup${C.reset}
-  ${C.gray}obsidian-vault-bridge v${require("./package.json").version}${C.reset}
+  ${C.gray}obsidian-llm-wiki v${require("./package.json").version}${C.reset}
   ${C.dim}Turn your Obsidian vault into an MCP server for AI agents.${C.reset}
 `);
 

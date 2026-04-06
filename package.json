@@ -1,5 +1,5 @@
 {
-  "name": "obsidian-vault-bridge",
+  "name": "obsidian-llm-wiki",
   "version": "0.1.0",
   "description": "Obsidian plugin that exposes your vault to AI agents via WebSocket + MCP",
   "main": "main.js",
@@ -7,7 +7,7 @@
   "author": "Curry",
   "repository": {
     "type": "git",
-    "url": "https://github.com/2233admin/obsidian-vault-bridge"
+    "url": "https://github.com/2233admin/obsidian-llm-wiki"
   },
   "keywords": [
     "obsidian",

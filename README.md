@@ -1,6 +1,8 @@
-# Vault Bridge
+# Obsidian LLM Wiki
 
-[![CI](https://github.com/2233admin/obsidian-vault-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/2233admin/obsidian-vault-bridge/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](package.json) [![Python](https://img.shields.io/badge/python-%3E%3D3.11-brightgreen.svg)](kb_meta.py)
+[![CI](https://github.com/2233admin/obsidian-llm-wiki/actions/workflows/ci.yml/badge.svg)](https://github.com/2233admin/obsidian-llm-wiki/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](package.json) [![Python](https://img.shields.io/badge/python-%3E%3D3.11-brightgreen.svg)](kb_meta.py)
+
+**English** | [中文](README.zh-CN.md) | [日本語](README.ja.md)
 
 **Let your AI read, search, and build on your Obsidian notes.**
 
@@ -28,8 +30,8 @@ Vault Bridge turns your Obsidian vault into an MCP server that any AI agent (Cla
 ## Quick Start
 
 ```bash
-git clone https://github.com/2233admin/obsidian-vault-bridge.git
-cd obsidian-vault-bridge && npm install && npm run build
+git clone https://github.com/2233admin/obsidian-llm-wiki.git
+cd obsidian-llm-wiki && npm install && npm run build
 node setup.js
 ```
 
@@ -57,7 +59,7 @@ Add to `~/.claude/settings.json` (or `.cursor/mcp.json`):
   "mcpServers": {
     "vault-bridge": {
       "command": "node",
-      "args": ["/path/to/obsidian-vault-bridge/connector.js", "/path/to/your/vault"]
+      "args": ["/path/to/obsidian-llm-wiki/connector.js", "/path/to/your/vault"]
     }
   }
 }
@@ -225,6 +227,31 @@ AI Agent  <--MCP stdio-->  connector.js  <--WebSocket-->  Obsidian Plugin
 | `kb_meta.py` | Deterministic KB ops: diff, hash, index, lint, vitality | stdlib only |
 | `vault_bridge.py` | Async Python WebSocket client | `websockets` |
 | `mcp_server.py` | Python MCP server (alternative to connector.js) | `mcp`, `websockets` |
+
+---
+
+## FAQ
+
+**How do I connect Claude Code to my Obsidian vault?**
+Install the LLM Wiki plugin, run `node setup.js`, and it auto-configures MCP. Claude Code can then read, search, and write your notes directly.
+
+**How is this different from obsidian-claude-code-mcp?**
+LLM Wiki adds filesystem fallback (works without Obsidian running), knowledge compilation (Karpathy-style raw-to-wiki pipeline), graph queries, vault health checks, batch operations, and real-time events. See the comparison table above.
+
+**How is this different from obsidian-local-rest-api?**
+local-rest-api uses REST/HTTPS; LLM Wiki uses MCP (the protocol Claude Code and Cursor speak natively). No adapter needed, plus you get search, graph, and knowledge compilation built in.
+
+**Will this break my vault?**
+All write operations default to dry-run mode. Your agent must explicitly pass `dryRun: false` to change anything. The `.obsidian/` directory is protected from writes. Path traversal is blocked.
+
+**Does it work when Obsidian is closed?**
+Yes. The MCP connector falls back to direct filesystem access automatically. Search, read, and write all work without Obsidian running.
+
+**What is an LLM Wiki?**
+A term coined by Andrej Karpathy: use an LLM to "compile" raw sources (articles, papers, notes) into a structured, interlinked wiki with concepts, summaries, and cross-references. This plugin is the installable implementation of that idea.
+
+**What AI agents are supported?**
+Any MCP-compatible agent: Claude Code, Claude Desktop, Cursor, Windsurf, and any tool that supports the Model Context Protocol.
 
 ---
 
