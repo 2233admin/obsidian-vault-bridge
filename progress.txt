@@ -1,0 +1,21 @@
+# vault-mind Progress
+
+## What done (2026-04-07)
+- 竞品调研: NoteGen (11.2k stars) + Blinko (10k stars) -- 都不构成威胁
+- 设计 spec: 四层架构 (MCP + Unified Memory + Compiler + Agent)
+- 设计哲学: 马克思政治经济学 + 毛泽东三论 (矛盾/实践/群众)
+- Phase 1: scaffold + 代码迁入 (connector.js, kb_meta.py, 8 skills, 4 hooks)
+- Phase 2: MCP server TS (17 vault.* methods + adapter registry)
+- Phase 3: compiler auto-orchestration (compile.py + chunker + extractor + models)
+- 7 commits, ~6000 lines, TS 0 errors, ruff 全绿
+
+## What blocked
+- 无
+
+## Next step
+- Phase 4: Unified Query + Compile Triggers (MVP 最后一块)
+  - unifiedQuery() 多 adapter 并行搜索 + 融合排序
+  - adapter-memu + adapter-gitnexus 实现
+  - compile trigger: file change -> dirty queue -> auto compile
+- Phase 5: agent/evaluate.py 按矛盾论三论合一重写 (不是 if/elif 优先级遍历)
+- Phase 6: setup.sh + skills 迁入 + vault-health + vault-reconcile
