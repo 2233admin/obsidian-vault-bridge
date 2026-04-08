@@ -127,6 +127,21 @@ class VaultBridge:
 
     async def read(self, path: str) -> str:
         r = await self.call("vault.read", {"path": path})
+        if not isinstance(r, dict):
+            raise VaultBridgeError(
+                -32603,
+                f"malformed read response: expected dict, got {type(r).__name__}: {r!r}",
+            )
+        if "content" not in r:
+            raise VaultBridgeError(
+                -32603,
+                f"malformed read response: missing 'content' key: {r!r}",
+            )
+        if not isinstance(r["content"], str):
+            raise VaultBridgeError(
+                -32603,
+                f"malformed read response: 'content' is {type(r['content']).__name__}, expected str: {r!r}",
+            )
         return r["content"]
 
     async def stat(self, path: str) -> dict:

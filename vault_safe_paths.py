@@ -148,16 +148,43 @@ def is_blocked_directory(path: str) -> bool:
     return False
 
 
+def _normalize_vault_path(path: str) -> str:
+    """Normalize a vault-relative path to match the TypeScript handler.
+
+    The TS handler at src/handlers.ts:19-22 strips leading ``./``, collapses
+    consecutive ``/`` separators, and drops bare ``.`` segments before
+    forwarding the path to the safety gate.  This function replicates that
+    normalization so both layers agree on borderline paths.
+
+    Absolute paths and ``..`` segments are left intact so that the caller
+    (``_has_path_traversal``) can still detect and reject them.
+    """
+    norm = path.replace("\\", "/")
+    # Strip a single leading "./" (sloppy LLM clients often emit these).
+    if norm.startswith("./"):
+        norm = norm[2:]
+    # Collapse consecutive slashes.
+    while "//" in norm:
+        norm = norm.replace("//", "/")
+    # Drop bare "." segments that appear anywhere in the path (e.g. "a/./b").
+    # We keep ".." so that _has_path_traversal can still reject it.
+    parts = norm.split("/")
+    parts = [p for p in parts if p != "."]
+    norm = "/".join(parts)
+    return norm
+
+
 def _has_path_traversal(path: str) -> bool:
     """True if the path contains traversal markers or absolute prefixes."""
-    norm = path.replace("\\", "/")
+    # Normalize first so that "." segments are stripped before checking.
+    norm = _normalize_vault_path(path)
     if norm.startswith("/"):
         return True
     # Windows drive letter (C:, D:, ...).
     if len(norm) >= 2 and norm[1] == ":":
         return True
     parts = norm.split("/")
-    return any(p in ("..", ".") for p in parts)
+    return any(p == ".." for p in parts)
 
 
 def is_safe_to_write(path: str, *, allow_canvas: bool = False) -> bool:
@@ -182,13 +209,18 @@ def is_safe_to_write(path: str, *, allow_canvas: bool = False) -> bool:
     """
     if not path or not path.strip():
         return False
+    # Normalize first so that "." segments and leading "./" are stripped
+    # before any check runs.  _has_path_traversal also calls
+    # _normalize_vault_path internally; we normalize here so the directory
+    # and extension checks also see the cleaned path.
+    normalized = _normalize_vault_path(path)
     if _has_path_traversal(path):
         return False
-    if is_blocked_directory(path):
+    if is_blocked_directory(normalized):
         return False
-    if is_blocked_extension(path):
+    if is_blocked_extension(normalized):
         return False
-    suffix = PurePosixPath(path.replace("\\", "/")).suffix.lower()
+    suffix = PurePosixPath(normalized).suffix.lower()
     if suffix == ".canvas" and not allow_canvas:
         return False
     # TODO(P3): the `if suffix` prefix lets extensionless files

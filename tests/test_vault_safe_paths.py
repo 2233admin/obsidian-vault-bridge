@@ -150,8 +150,13 @@ def test_traversal_parent_dir_refused() -> None:
     assert is_safe_to_write("../secrets.md") is False
 
 
-def test_traversal_current_dir_refused() -> None:
-    assert is_safe_to_write("./rel.md") is False
+def test_traversal_current_dir_normalized_and_accepted() -> None:
+    # Behavior change (Bug #9 fix): a bare "./" prefix is now stripped by
+    # _normalize_vault_path() to match the TypeScript handler normalization
+    # at src/handlers.ts:19-22.  "./rel.md" becomes "rel.md" after
+    # normalization, which is a safe relative path.  The old test asserted
+    # False; updated to True to match the TS layer.
+    assert is_safe_to_write("./rel.md") is True
 
 
 def test_absolute_posix_path_refused() -> None:
@@ -287,3 +292,38 @@ def test_allowed_extensions_include_markdown_family() -> None:
     assert ".md" in ALLOWED_VAULT_EXTENSIONS
     assert ".markdown" in ALLOWED_VAULT_EXTENSIONS
     assert ".txt" in ALLOWED_VAULT_EXTENSIONS
+
+
+# ---------- Bug #9: path normalization (TS-layer alignment) ----------
+# These tests document the corrected behaviour after _normalize_vault_path
+# was introduced.  The TS handler at src/handlers.ts:19-22 strips leading
+# "./" and collapses "//" before forwarding paths to the safety gate; Python
+# now matches that normalization so both layers agree on borderline inputs.
+
+def test_normalize_dot_slash_prefix_accepted() -> None:
+    # "./notes/idea.md" -> "notes/idea.md" after normalization -> safe.
+    assert is_safe_to_write("./notes/idea.md") is True
+
+
+def test_normalize_double_slash_accepted() -> None:
+    # "notes//idea.md" -> "notes/idea.md" after collapsing "//" -> safe.
+    assert is_safe_to_write("notes//idea.md") is True
+
+
+def test_normalize_dot_slash_then_dotdot_still_rejected() -> None:
+    # "./../secrets.md" strips leading "./" -> "../secrets.md" which still
+    # contains ".." -> traversal -> rejected.
+    assert is_safe_to_write("./../secrets.md") is False
+
+
+def test_normalize_dotdot_still_rejected() -> None:
+    assert is_safe_to_write("../notes/idea.md") is False
+
+
+def test_normalize_absolute_still_rejected() -> None:
+    assert is_safe_to_write("/abs/path.md") is False
+
+
+def test_normalize_mid_path_dot_segment_accepted() -> None:
+    # "notes/./idea.md" -> "notes/idea.md" after dropping bare "." -> safe.
+    assert is_safe_to_write("notes/./idea.md") is True

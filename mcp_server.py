@@ -23,7 +23,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
-from vault_bridge import VaultBridge
+from vault_bridge import VaultBridge, VaultBridgeError
 
 app = Server("vault-bridge")
 _bridge: VaultBridge | None = None
@@ -269,6 +269,19 @@ async def list_tools() -> list[Tool]:
     return TOOLS
 
 
+def _format_vault_error(e: VaultBridgeError) -> dict:
+    """Convert a VaultBridgeError into a structured dict for MCP TextContent.
+
+    Returns {"error": {"code": <int>, "message": <str>}} so LLM clients can
+    distinguish error codes without string-parsing.  data is included only
+    when present to keep the payload minimal.
+    """
+    payload: dict = {"error": {"code": e.code, "message": str(e)}}
+    if e.data is not None:
+        payload["error"]["data"] = e.data
+    return payload
+
+
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name not in TOOL_MAP:
@@ -282,6 +295,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         result = await vb.call(rpc_method, params)
         text = json.dumps(result, indent=2, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
         return [TextContent(type="text", text=text)]
+    except VaultBridgeError as e:
+        # Preserve structured error code so LLM clients can distinguish
+        # RPC_FILE_NOT_FOUND / RPC_INVALID_PARAMS / RPC_SAFETY_PATH_BLOCKED
+        # etc. without parsing strings.
+        payload = _format_vault_error(e)
+        return [TextContent(type="text", text=json.dumps(payload, ensure_ascii=False))]
     except Exception as e:
         return [TextContent(type="text", text=f"Error: {e}")]
 
