@@ -24,6 +24,8 @@ from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
 from vault_bridge import VaultBridge, VaultBridgeError
+from vault_safe_paths import is_safe_to_write
+from vault_write_validator import validate_vault_write, ValidationResult
 
 app = Server("vault-bridge")
 _bridge: VaultBridge | None = None
@@ -269,6 +271,86 @@ async def list_tools() -> list[Tool]:
     return TOOLS
 
 
+# ---------- Safety preflight gate ----------
+# Client-side mirror of the TS authoritative gate.
+# Fails fast before burning a WebSocket round-trip.
+# vault_mkdir is path-only (no content gate) per ADR Q2.
+
+WRITE_TOOLS_PATH_GATED: frozenset[str] = frozenset({
+    "vault_create", "vault_modify", "vault_append",
+    "vault_delete", "vault_rename", "vault_mkdir",
+})
+WRITE_TOOLS_CONTENT_GATED: frozenset[str] = frozenset({
+    "vault_create", "vault_modify", "vault_append",
+})
+
+
+async def _preflight_write_gate(name: str, params: dict) -> TextContent | None:
+    """Client-side safety mirror of the TS authoritative gate.
+
+    Returns a TextContent error to abort, or None to proceed.
+    vault_mkdir is in WRITE_TOOLS_PATH_GATED but NOT in TOOL_MAP --
+    it is only reachable via vault_batch sub-operations (ADR Q2 decision).
+    """
+    # Path gate (also covers rename to/from and delete path)
+    if name in WRITE_TOOLS_PATH_GATED:
+        paths_to_check = []
+        if name == "vault_rename":
+            paths_to_check.append(params.get("to", ""))
+            paths_to_check.append(params.get("from", ""))
+        else:
+            paths_to_check.append(params.get("path", ""))
+        for pth in paths_to_check:
+            if not pth:
+                continue
+            if not is_safe_to_write(pth, allow_canvas=False):
+                return TextContent(
+                    type="text",
+                    text=json.dumps({
+                        "error": "safety_gate_rejected",
+                        "reason": "protected_path",
+                        "path": pth,
+                        "hint": "path matches blocked extension, directory, or traversal pattern",
+                    }, ensure_ascii=False),
+                )
+
+    # Content gate for create/modify/append
+    if name in WRITE_TOOLS_CONTENT_GATED:
+        content = params.get("content", "")
+        if not isinstance(content, str):
+            return None  # let server reject
+        original = None
+        if name in ("vault_modify", "vault_append"):
+            try:
+                vb = await get_bridge()
+                read_result = await vb.call("vault.read", {"path": params["path"]})
+                original = read_result.get("content") if isinstance(read_result, dict) else None
+                if name == "vault_append" and isinstance(original, str):
+                    content = original + content  # validate combined content
+            except Exception:
+                original = None  # read failed, let server handle
+
+        result = validate_vault_write(
+            new_content=content,
+            original_content=original,
+            require_frontmatter=False,
+        )
+        if not result.is_valid:
+            return TextContent(
+                type="text",
+                text=json.dumps({
+                    "error": "safety_gate_rejected",
+                    "reason": "content_validation_failed",
+                    "errors": result.errors,
+                    "warnings": result.warnings,
+                }, ensure_ascii=False),
+            )
+
+    # vault_batch sub-op recursion handled in commit 6 (_preflight_write_gate extension)
+
+    return None
+
+
 def _format_vault_error(e: VaultBridgeError) -> dict:
     """Convert a VaultBridgeError into a structured dict for MCP TextContent.
 
@@ -289,6 +371,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
     rpc_method, transform = TOOL_MAP[name]
     params = transform(arguments)
+
+    # Safety gate: fail fast before burning an RPC round-trip.
+    # TS handler is still the authoritative gate; this is a client-side mirror.
+    gate_error = await _preflight_write_gate(name, params)
+    if gate_error is not None:
+        return [gate_error]
 
     try:
         vb = await get_bridge()
