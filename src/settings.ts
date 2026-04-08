@@ -1,5 +1,6 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type VaultBridgePlugin from "./main";
+import { getVaultBasePath } from "./fs-helpers";
 
 export function generateToken(): string {
   return require("crypto").randomBytes(32).toString("hex");
@@ -32,7 +33,7 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
 
     // -- MCP Config Copy --
     if (running) {
-      const vaultPath = (this.app.vault.adapter as any).basePath?.replace(/\\/g, "/") || "/path/to/vault";
+      const vaultPath = (getVaultBasePath(this.app) ?? "/path/to/vault").replace(/\\/g, "/");
       const mcpConfig = JSON.stringify({
         mcpServers: {
           "llm-wiki": {

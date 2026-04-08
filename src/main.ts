@@ -6,6 +6,7 @@ import { WsServer } from "./server";
 import { registerHandlers } from "./handlers";
 import { registerVaultEvents } from "./events";
 import { writePortFile, deletePortFile, cleanStalePortFile } from "./port-file";
+import { getVaultBasePath } from "./fs-helpers";
 
 export default class VaultBridgePlugin extends Plugin {
   settings: VaultBridgeSettings = { ...DEFAULT_SETTINGS };
@@ -59,7 +60,7 @@ export default class VaultBridgePlugin extends Plugin {
         writePortFile(
           resolvedPort,
           this.settings.token,
-          (this.app.vault.adapter as any).basePath,
+          getVaultBasePath(this.app) ?? "",
         );
         console.log("LLM Wiki: server ready on port " + resolvedPort);
       },

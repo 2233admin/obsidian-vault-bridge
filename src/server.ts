@@ -61,7 +61,9 @@ export class WsServer {
       ws.on("close", () => {
         clearTimeout(authTimer);
         this.clients.delete(ws);
-        ws.terminate(); // ensure socket is fully destroyed
+        // No terminate() here -- the socket is already closing by definition.
+        // Force-terminate is reserved for the auth-timeout and error paths
+        // where the peer is non-responsive.
       });
 
       ws.on("error", (err) => {

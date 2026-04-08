@@ -12,10 +12,29 @@ const VERSION = "0.2.0";
 
 // ReDoS guard: reject regex patterns with nested quantifiers that cause catastrophic backtracking
 function rejectDangerousRegex(pattern) {
-  // Detect nested quantifiers: (x+)+, (x*)+, (x+)*, (x{2,})+ etc.
-  if (/(\([^)]*[+*}]\s*\))[+*{]/.test(pattern)) throw { code: -32602, message: "regex rejected: nested quantifiers (ReDoS risk)" };
-  // Detect overlapping alternation with quantifiers: (a|a)+
-  if (/\([^)]*\|[^)]*\)[+*{]/.test(pattern) && /(\w)\|.*\1/.test(pattern)) throw { code: -32602, message: "regex rejected: overlapping alternation (ReDoS risk)" };
+  // Nested quantifiers: (x+)+, (x*)+, (x+)*, (x{2,})+ etc.
+  if (/\([^)]*[+*}]\s*\)[+*{]/.test(pattern))
+    throw { code: -32602, message: "regex rejected: nested quantifiers (ReDoS risk)" };
+
+  // Overlapping alternation inside a quantified group: (a|a)+, (ab|a)+,
+  // (cat|cats)+. Split arms, compare leading effective tokens. Tighter
+  // than the prior /(\w)\|.*\1/ check which had both false positives
+  // (e.g. (cats|dogs)+) and false negatives (e.g. (ab|a)+).
+  const quantGroupMatch = pattern.match(/\(([^)]*\|[^)]*)\)[+*{]/);
+  if (quantGroupMatch) {
+    const arms = quantGroupMatch[1].split("|");
+    const firstTokens = arms.map((arm) => {
+      if (arm.startsWith("\\") && arm.length >= 2) return arm.slice(0, 2);
+      return arm.charAt(0);
+    });
+    for (let i = 0; i < firstTokens.length; i++) {
+      for (let j = i + 1; j < firstTokens.length; j++) {
+        if (firstTokens[i] && firstTokens[i] === firstTokens[j]) {
+          throw { code: -32602, message: "regex rejected: overlapping alternation (ReDoS risk)" };
+        }
+      }
+    }
+  }
 }
 
 // --- Transport layer ---

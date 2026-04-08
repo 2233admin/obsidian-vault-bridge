@@ -1,11 +1,34 @@
 import { App, TFile, TFolder } from "obsidian";
 import type { SearchOptions, SearchResult, SearchMatch } from "./types";
+import { getVaultBasePath } from "./fs-helpers";
 
 function rejectDangerousRegex(pattern: string): void {
-  if (/(\([^)]*[+*}]\s*\))[+*{]/.test(pattern))
+  // Nested quantifiers like (a+)+ or (\d{2,})+ -- classic ReDoS.
+  if (/\([^)]*[+*}]\s*\)[+*{]/.test(pattern))
     throw new Error("regex rejected: nested quantifiers (ReDoS risk)");
-  if (/\([^)]*\|[^)]*\)[+*{]/.test(pattern) && /(\w)\|.*\1/.test(pattern))
-    throw new Error("regex rejected: overlapping alternation (ReDoS risk)");
+
+  // Overlapping alternation inside a quantified group: (a|a)+, (ab|a)+,
+  // (cat|cats)+. We split the arms of the quantified alternation and
+  // reject if any two share a leading (effective) character. This is
+  // a tighter heuristic than the prior /(\w)\|.*\1/ check, which had
+  // both false positives (e.g. (cats|dogs)+) and false negatives
+  // (e.g. (ab|a)+). Escape sequences like \d and \w are compared as
+  // two-char units so \d vs \w does not collide.
+  const quantGroupMatch = pattern.match(/\(([^)]*\|[^)]*)\)[+*{]/);
+  if (quantGroupMatch) {
+    const arms = quantGroupMatch[1].split("|");
+    const firstTokens = arms.map((arm) => {
+      if (arm.startsWith("\\") && arm.length >= 2) return arm.slice(0, 2);
+      return arm.charAt(0);
+    });
+    for (let i = 0; i < firstTokens.length; i++) {
+      for (let j = i + 1; j < firstTokens.length; j++) {
+        if (firstTokens[i] && firstTokens[i] === firstTokens[j]) {
+          throw new Error("regex rejected: overlapping alternation (ReDoS risk)");
+        }
+      }
+    }
+  }
 }
 
 export class VaultBridge {
@@ -16,7 +39,11 @@ export class VaultBridge {
   }
 
   getVaultPath(): string {
-    return (this.app.vault.adapter as any).basePath;
+    const base = getVaultBasePath(this.app);
+    if (base === null) {
+      throw new Error("getVaultPath: vault adapter does not expose a basePath");
+    }
+    return base;
   }
 
   async read(path: string): Promise<string> {

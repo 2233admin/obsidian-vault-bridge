@@ -13,6 +13,28 @@ interface RpcError {
   message: string;
 }
 
+/**
+ * Narrow an unknown thrown value into an RPC-compatible {code, message}
+ * shape without using `any`. Accepts:
+ *   - RpcError-like objects (with numeric .code and string .message)
+ *   - Error instances (uses .message, falls back to provided code)
+ *   - Anything else (stringifies)
+ */
+function toRpcError(err: unknown, fallbackCode: number = -32000): RpcError {
+  if (err && typeof err === "object") {
+    const e = err as { code?: unknown; message?: unknown };
+    const code = typeof e.code === "number" ? e.code : fallbackCode;
+    const message =
+      typeof e.message === "string"
+        ? e.message
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    return { code, message };
+  }
+  return { code: fallbackCode, message: String(err) };
+}
+
 function validatePath(p: unknown): string {
   if (typeof p !== "string" || !p.trim())
     throw { code: RPC_INVALID_PARAMS, message: "path required" } as RpcError;
@@ -204,11 +226,11 @@ export function registerHandlers(
         const result = await Promise.resolve(handler(params));
         results.push({ index: i, ok: true, result });
         succeeded++;
-      } catch (err: any) {
+      } catch (err) {
         results.push({
           index: i,
           ok: false,
-          error: { code: err?.code ?? -32000, message: err?.message ?? String(err) },
+          error: toRpcError(err),
         });
         failed++;
       }
