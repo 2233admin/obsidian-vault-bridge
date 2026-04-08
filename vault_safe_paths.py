@@ -125,6 +125,14 @@ BLOCKED_DIRECTORIES: frozenset[str] = frozenset({
 
 def is_blocked_extension(path: str) -> bool:
     """True if the file extension is on the blocklist (Caveman + vault extras)."""
+    # TODO(P2): bare dotfiles like ".env" bypass this check because
+    # PurePosixPath(".env").suffix == "" -- pathlib treats the leading dot
+    # as the stem, not the suffix. So is_safe_to_write(".env") returns True
+    # even though ".env" is in _CAVEMAN_SKIP_EXTENSIONS. Fix direction:
+    # special-case bare dotfile filenames here, or move ".env" out of the
+    # extension blocklist into a filename blocklist. Test
+    # `test_dotenv_filename_reaches_blocklist_via_suffix_only` documents
+    # the current (broken) behavior.
     suffix = PurePosixPath(path.replace("\\", "/")).suffix.lower()
     if not suffix:
         return False
@@ -183,6 +191,13 @@ def is_safe_to_write(path: str, *, allow_canvas: bool = False) -> bool:
     suffix = PurePosixPath(path.replace("\\", "/")).suffix.lower()
     if suffix == ".canvas" and not allow_canvas:
         return False
+    # TODO(P3): the `if suffix` prefix lets extensionless files
+    # (Makefile, README, dotfiles like ".env" -- see is_blocked_extension
+    # P2) fall through and return True. The stated intent of this module
+    # is markdown-first, so unknown OR missing suffixes should both be
+    # refused. Fix direction: drop the `if suffix` prefix, or add an
+    # explicit extensionless branch. Test `test_extensionless_file_refused`
+    # documents the current (broken) behavior.
     if suffix and suffix not in ALLOWED_VAULT_EXTENSIONS:
         # Unknown extension -- err on the side of safety.
         return False

@@ -180,6 +180,10 @@ def _check_heading_hierarchy(new: str, result: ValidationResult) -> None:
     for i, (level, title) in enumerate(headings[1:], 1):
         # Only flag strict skips going down (h1 to h3, h2 to h4, ...).
         if level > prev_level + 1:
+            # TODO(P3): the second string literal below is NOT an f-string,
+            # so users see the literal text "h{prev_level + 1}" instead of
+            # the computed level (e.g. "h2"). Fix: prepend `f` to the
+            # second string, or merge into a single f-string.
             result.add_warning(
                 f"heading skip at #{i}: h{prev_level} -> h{level} ('{title[:40]}'); "
                 "consider inserting an h{prev_level + 1}"
