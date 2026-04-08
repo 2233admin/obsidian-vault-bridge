@@ -15,3 +15,6 @@ _stress_*.json
 
 # GEO submission drafts (local only)
 geo/
+
+# Session-local working notes
+progress.txt
