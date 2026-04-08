@@ -17,3 +17,7 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Harness runtime state
+.omc/
+mcp-server/.omc/
