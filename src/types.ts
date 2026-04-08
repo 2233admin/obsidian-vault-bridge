@@ -2,12 +2,22 @@ export interface VaultBridgeSettings {
   port: number;
   token: string;
   dryRunDefault: boolean;
+  safety: {
+    enabled: boolean;                                              // default: true
+    allowCanvas: boolean;                                         // default: false
+    requireFrontmatter: "never" | "new-files-only" | "always";   // default: "new-files-only"
+  };
 }
 
 export const DEFAULT_SETTINGS: VaultBridgeSettings = {
   port: 48765,
   token: "",
   dryRunDefault: true,
+  safety: {
+    enabled: true,
+    allowCanvas: false,
+    requireFrontmatter: "new-files-only",
+  },
 };
 
 export interface ClientState {

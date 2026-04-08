@@ -32,6 +32,8 @@ export const RPC_FILE_NOT_FOUND = -32001;
 export const RPC_FILE_EXISTS = -32002;
 export const RPC_PERMISSION_DENIED = -32003;
 export const RPC_DRY_RUN_FAIL = -32004;
+export const RPC_SAFETY_PATH_BLOCKED = -32010;
+export const RPC_SAFETY_CONTENT_REJECTED = -32011;
 
 export function parseMessage(raw: string): JsonRpcRequest | { error: JsonRpcError } {
   let msg: any;
