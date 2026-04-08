@@ -28,3 +28,4 @@ htmlcov/
 scripts/bench_cache/
 scripts/bench_results/
 scripts/queries.json
+.gitnexus
