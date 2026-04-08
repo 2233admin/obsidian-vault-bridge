@@ -240,12 +240,14 @@ export function registerHandlers(
 
   server.registerHandler("vault.mkdir", async (p) => {
     const path = validatePath(p.path);
-    if (!isSafeToWrite(path, { allowCanvas: false })) {
-      throw {
-        code: RPC_SAFETY_PATH_BLOCKED,
-        message: "Safety gate rejected mkdir: protected path",
-        data: { gate: "path", path },
-      } as RpcError;
+    if (settings.safety?.enabled !== false) {
+      if (!isSafeToWrite(path, { allowCanvas: settings.safety?.allowCanvas ?? false })) {
+        throw {
+          code: RPC_SAFETY_PATH_BLOCKED,
+          message: "Safety gate rejected mkdir: protected path",
+          data: { gate: "path", path },
+        } as RpcError;
+      }
     }
     // NOTE: no validateVaultWrite call -- mkdir has no content.
     if (isDryRun(p, settings))
