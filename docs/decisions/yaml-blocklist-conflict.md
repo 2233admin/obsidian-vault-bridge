@@ -237,3 +237,158 @@ applying the proposal:
 - `CLAUDE.md` -- "Plugin write operations must have dry-run mode"
   constraint and MCP-primary / WebSocket-fallback transport model
 - W4 architect-critic review session, 2026-04-08
+
+## Resolution of Open Questions (2026-04-08 session continuation)
+
+Both open questions above were verified against the codebase during
+the W7 dispatch prep. The ADR primary path still holds; no
+amendment needed. This section pins the findings so the executor
+agent does not re-derive them.
+
+### Resolution of Q1 -- Python preflight scope for `vault_init`
+
+**Verified: `TOOL_MAP` in `mcp_server.py` does NOT expose `vault_init`.**
+
+Reading `mcp_server.py:247-263`, `TOOL_MAP` contains exactly 17
+entries: `vault_read`, `vault_list`, `vault_stat`, `vault_exists`,
+`vault_create`, `vault_modify`, `vault_append`, `vault_delete`,
+`vault_rename`, `vault_search`, `vault_search_by_tag`,
+`vault_search_by_frontmatter`, `vault_get_metadata`, `vault_graph`,
+`vault_backlinks`, `vault_lint`, `vault_batch`. Neither `vault_init`
+nor `vault_mkdir` is present.
+
+**Consequences for the preflight gate:**
+
+1. **Direct MCP path**: LLM clients cannot reach `vault.init` through
+   the MCP server at all. No explicit bypass is needed in
+   `_preflight_write_gate`.
+2. **Batch sub-op path**: `vault.batch` forwards to the TS handler,
+   which (at `handlers.ts:218`) accepts any method that starts with
+   `vault.` and is not `vault.batch`. So `vault.init` IS reachable
+   as a batch sub-op. But the Python batch preflight's `reverse_map`
+   (proposal patch 3) only knows `vault.create`, `vault.modify`,
+   `vault.append`, `vault.delete`, `vault.rename`. `vault.init` is
+   absent, so `sub_tool = reverse_map.get("vault.init") = None` and
+   the loop continues without gating. This is the desired behavior:
+   the Python batch preflight silently allows `vault.init` sub-ops.
+3. **TS authoritative layer**: `vault.init` calls `bridge.create`
+   and `bridge.mkdir` DIRECTLY (`handlers.ts:256,266,300`), bypassing
+   `server.getHandler("vault.create")`, so the handler-layer gate
+   does not see these calls. The ADR primary path (handler-layer
+   wiring) naturally exempts `vault.init` without any trust flag.
+
+**Action for executor**: No code change. Document this in a comment
+above the `reverse_map` in `_preflight_write_gate` so the next reader
+understands why `vault.init` is absent.
+
+### Resolution of Q2 -- `vault.mkdir` gate design
+
+**Verified: reusing `isSafeToWrite` for `vault.mkdir` is safe.**
+
+Walked every code path in `vault_safe_paths.py:190-236`
+(`is_safe_to_write`) against mkdir use cases:
+
+| Input path | Path traversal | Blocked dir | Blocked ext | Allowlist fallback | Result |
+|---|---|---|---|---|---|
+| `notes/new-folder` | no | no | no (empty suffix) | no (empty suffix, `if suffix` skips) | **TRUE** (correct, valid mkdir) |
+| `.obsidian.bak/foo` | no | **YES** (`.obsidian.bak` in `BLOCKED_DIRECTORIES`) | -- | -- | **FALSE** (correct, blocked) |
+| `../secret` | **YES** (traversal) | -- | -- | -- | **FALSE** (correct) |
+| `foo.yaml` (dotted dir name) | no | no | **YES** (`.yaml` in blocklist) | -- | **FALSE** (acceptable; markdown-first vault, dotted dir names rare) |
+| `.env` (bare dotfile dir) | no | no | no (P2 bug: `PurePosixPath(".env").suffix == ""`) | no (empty suffix) | **TRUE** (inherits existing P2 TODO; NOT a W7 regression) |
+
+**Key insight**: the P3 TODO at `vault_safe_paths.py:226-232`
+(extensionless files pass) is a **bug for files** (Makefile, README
+would slip through `vault.create`) but the **correct behavior for
+directories**. The two use cases share the same function and the
+shared semantics happen to be right for the mkdir branch.
+
+**TS patch for handlers.ts:153** (`vault.mkdir`):
+
+```ts
+server.registerHandler("vault.mkdir", async (p) => {
+  const path = validatePath(p.path);
+  if (!isSafeToWrite(path, { allowCanvas: false })) {
+    throw {
+      code: RPC_SAFETY_PATH_BLOCKED,
+      message: "Safety gate rejected mkdir: protected path",
+      data: { gate: "path", path },
+    } as RpcError;
+  }
+  // NOTE: no validateVaultWrite call -- mkdir has no content.
+  if (isDryRun(p, settings))
+    return { dryRun: true, action: "mkdir", path, wouldSucceed: !bridge.exists(path) };
+  await safeExec(() => bridge.mkdir(path));
+  return { ok: true, path };
+});
+```
+
+**Python patch for `_preflight_write_gate`**: add `vault_mkdir` to
+`WRITE_TOOLS_PATH_GATED` but NOT to `WRITE_TOOLS_CONTENT_GATED`.
+Also extend the batch `reverse_map` with `"vault.mkdir":
+"vault_mkdir"` so batch sub-ops get the path check.
+
+```python
+WRITE_TOOLS_PATH_GATED = {
+    "vault_create", "vault_modify", "vault_append",
+    "vault_delete", "vault_rename", "vault_mkdir",
+}
+WRITE_TOOLS_CONTENT_GATED = {"vault_create", "vault_modify", "vault_append"}
+
+# In batch reverse_map:
+reverse_map = {
+    "vault.create": "vault_create",
+    "vault.modify": "vault_modify",
+    "vault.append": "vault_append",
+    "vault.delete": "vault_delete",
+    "vault.rename": "vault_rename",
+    "vault.mkdir":  "vault_mkdir",   # path-only (no content gate)
+}
+```
+
+**Note**: `vault_mkdir` is NOT added to `TOOL_MAP` in this patch.
+MCP clients still cannot reach `vault.mkdir` directly -- only via
+`vault.batch`. Adding `vault_mkdir` to `TOOL_MAP` is a separate
+feature decision out of scope for W7.
+
+**Test invariants for W7** (add to safety test suite):
+
+```python
+# Python
+def test_mkdir_path_safe_valid_dir():
+    assert is_safe_to_write("notes/new-folder") is True
+
+def test_mkdir_path_rejected_obsidian_bak():
+    assert is_safe_to_write(".obsidian.bak/anything") is False
+
+def test_batch_vault_mkdir_sub_op_path_gated():
+    # Construct a vault_batch call with a vault.mkdir sub-op targeting
+    # ".obsidian" -- expect safety_gate_rejected with batch index 0.
+    ...
+```
+
+```ts
+// vitest
+it("vault.mkdir rejects protected directory names", async () => {
+  await expect(handler({ path: ".obsidian/plugins" }))
+    .rejects.toMatchObject({ code: RPC_SAFETY_PATH_BLOCKED });
+});
+
+it("vault.mkdir allows normal directory creation", async () => {
+  const r = await handler({ path: "notes/new-topic", dryRun: true });
+  expect(r).toMatchObject({ dryRun: true, action: "mkdir" });
+});
+
+it("vault.init scaffold mkdirs bypass the gate (handler-layer ADR invariant)", async () => {
+  // vault.init calls bridge.mkdir directly, not server.getHandler("vault.mkdir")
+  // so safety gate must NOT intercept scaffold directory creation.
+  const r = await initHandler({ topic: "test-topic" });
+  expect(r.ok).toBe(true);
+});
+```
+
+### Status
+
+ADR primary path confirmed. No changes to the decision above. The
+handler-layer wiring plus the `vault.mkdir` extension and the
+documented `vault.init` batch exemption are sufficient. Proceed
+to W7 dispatch.
