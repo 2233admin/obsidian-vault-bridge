@@ -19,6 +19,46 @@ class VaultBridgeError(Exception):
         self.data = data
 
 
+def _require_response_shape(
+    method: str, response: Any, key: str, expected_type: type
+) -> Any:
+    """Validate a response dict has the expected key and value type.
+
+    Mirrors the shape-check pattern introduced for read() in commit
+    8bd8f4b (#11). Centralizes the check so sibling sites (exists,
+    search_by_tag, backlinks, capabilities) reject malformed responses
+    with a structured VaultBridgeError(-32603) instead of raising a
+    bare KeyError or AttributeError from a later deref.
+
+    Raises:
+        VaultBridgeError(-32603) if response is not a dict, is missing
+        the key, or the value at that key is not the expected type.
+
+    Returns:
+        The validated value at response[key].
+    """
+    if not isinstance(response, dict):
+        raise VaultBridgeError(
+            -32603,
+            f"malformed {method} response: expected dict, got "
+            f"{type(response).__name__}: {response!r}",
+        )
+    if key not in response:
+        raise VaultBridgeError(
+            -32603,
+            f"malformed {method} response: missing {key!r} key: {response!r}",
+        )
+    value = response[key]
+    if not isinstance(value, expected_type):
+        raise VaultBridgeError(
+            -32603,
+            f"malformed {method} response: {key!r} is "
+            f"{type(value).__name__}, expected {expected_type.__name__}: "
+            f"{response!r}",
+        )
+    return value
+
+
 class VaultBridge:
     def __init__(self, url: str, token: str, *, timeout: float = DEFAULT_TIMEOUT):
         self._url = url
@@ -152,7 +192,7 @@ class VaultBridge:
 
     async def exists(self, path: str) -> bool:
         r = await self.call("vault.exists", {"path": path})
-        return r["exists"]
+        return _require_response_shape("exists", r, "exists", bool)
 
     # -- write (dry-run gated server-side) --------------------------------
 
@@ -214,7 +254,7 @@ class VaultBridge:
 
     async def search_by_tag(self, tag: str) -> list[str]:
         r = await self.call("vault.searchByTag", {"tag": tag})
-        return r["files"]
+        return _require_response_shape("searchByTag", r, "files", list)
 
     async def search_by_frontmatter(self, key: str, value: Any = None) -> list[dict]:
         p: dict[str, Any] = {"key": key}
@@ -228,7 +268,7 @@ class VaultBridge:
 
     async def backlinks(self, path: str) -> list[dict]:
         r = await self.call("vault.backlinks", {"path": path})
-        return r["backlinks"]
+        return _require_response_shape("backlinks", r, "backlinks", list)
 
     async def lint(self, *, required_frontmatter: list[str] | None = None) -> dict:
         p: dict[str, Any] = {}
@@ -244,7 +284,7 @@ class VaultBridge:
 
     async def capabilities(self) -> list[str]:
         r = await self.call("listCapabilities")
-        return r["methods"]
+        return _require_response_shape("listCapabilities", r, "methods", list)
 
     # -- subscriptions (Phase 4) -----------------------------------------
 
