@@ -25,18 +25,30 @@
   the original commit object (acceptable per A-plan: water already
   spilled when v0.1.0 was first published 4 days ago)
 
-## Outstanding
+## 2026-04-10 -- A-line wrapup session
 
-- GitHub release from CHANGELOG.md + RELEASE_NOTES.md (manual via gh CLI)
-- CLAUDE.md "Recommended Stack" section still describes the v0.1.0
-  Obsidian-plugin architecture; needs rewrite to match v1.0 headless-first
+### What done (discoveries + small edits)
+
+- **GitHub release v1.0.0 already existed** (published 2026-04-08T10:07:34Z,
+  body == RELEASE_NOTES.md). progress.txt previous "Outstanding" item was
+  stale. https://github.com/2233admin/obsidian-llm-wiki/releases/tag/v1.0.0
+- **Global ~/CLAUDE.md Project + Stack blocks rewritten** to reflect v1.0
+  reality: now distinguishes vault-mind (headless MCP, main) from
+  obsidian-vault-bridge (plugin, master). Stack block pruned from 64 lines
+  to ~22 lines (est. -2000 tokens/session). Committed separately in home
+  config repo.
+
+### Outstanding (unchanged from v1.0 ship)
+
 - Track 6 dedup execution (~65 file deletes in E:/knowledge, awaits
   Curry authorization)
 - Track 2a adapter-bases implementation (~1 week, biggest v1.1 investment)
+- main/master 分支策略决断 (master = 真正工作线 obsidian-vault-bridge,
+  main = 孤立 v1.0.0 release commit; 两条架构合为同一仓库是历史遗留)
+- Optionally push main to gitea remote as well (mirror)
 
 ## Next step
 
-- Cut GitHub release with gh CLI from CHANGELOG.md + RELEASE_NOTES.md
-- Update CLAUDE.md tech stack to reflect v1.0 reality
-- Optionally push main to gitea remote as well (mirror)
-- Begin Track 2a adapter-bases (separate session)
+- Begin Track 2a adapter-bases (separate session) OR
+- Pivot to B-line (obsidian-vault-bridge): Option A W8 test gap closure
+  (cross-language BLOCKED set snapshot, mkdir kill-switch negative test)
