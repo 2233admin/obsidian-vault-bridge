@@ -47,8 +47,31 @@
   main = 孤立 v1.0.0 release commit; 两条架构合为同一仓库是历史遗留)
 - Optionally push main to gitea remote as well (mirror)
 
+## 2026-04-13 -- Track 2a ObsidianAdapter complete
+
+### What done
+
+- ObsidianAdapter implemented: `mcp-server/src/adapters/obsidian.ts`
+  - JSON-RPC 2.0 over WebSocket, reads `~/.obsidian-ws-port` for port+token
+  - search/read/write/graph/events -- all 5 capabilities
+  - write() tries vault.modify, falls back to vault.create on -32001
+  - Graceful degradation: init() always resolves, isAvailable=false on failure
+  - rejectAllPending() cleans up in-flight RPCs on WS close or dispose
+- ObsidianAdapter registered in index.ts (enabledAdapters.has("obsidian") gate)
+- Tests: `mcp-server/src/adapters/obsidian.test.ts` -- 20/20 pass
+  - 3 suites: unavailable paths (8), mock WS server (11), auth rejection (1)
+  - Ports 60001/60002 (Windows reserved range 49876+ was EACCES)
+- Commits: 545996d (impl) + 8efeff0 (tests), pushed to GitHub
+
+### Outstanding
+
+- Track 6 dedup execution (~65 file deletes in E:/knowledge, awaits
+  Curry authorization)
+- main/master branch strategy decision (master = obsidian-vault-bridge,
+  main = vault-mind headless MCP; same repo, different architectures)
+- Optionally push main to gitea mirror
+
 ## Next step
 
-- Begin Track 2a adapter-bases (separate session) OR
-- Pivot to B-line (obsidian-vault-bridge): Option A W8 test gap closure
-  (cross-language BLOCKED set snapshot, mkdir kill-switch negative test)
+- Track 2b: wire ObsidianAdapter into unifiedQuery score fusion + weight config
+- OR pivot to B-line (obsidian-vault-bridge) W8 test gap closure
