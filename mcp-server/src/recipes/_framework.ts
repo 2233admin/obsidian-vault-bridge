@@ -1,5 +1,5 @@
 import { readFileSync, existsSync, appendFileSync, mkdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import type { Recipe, RecipeFrontmatter, RecipeStatus, RecipeEvent } from './_types.js';
