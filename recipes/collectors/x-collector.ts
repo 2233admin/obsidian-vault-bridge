@@ -70,7 +70,6 @@ if (!BEARER_TOKEN) {
   process.exit(1);
 }
 
-const VAULT_MIND_DIR = process.env.VAULT_MIND_DIR ?? process.cwd();
 const OUTPUT_DIR = join(homedir(), '.vault-mind', 'recipes', 'x-to-vault');
 const RAW_DIR = join(OUTPUT_DIR, 'raw');
 const DIGESTS_DIR = join(OUTPUT_DIR, 'digests');
@@ -79,6 +78,7 @@ const HEARTBEAT_FILE = join(OUTPUT_DIR, 'heartbeat.jsonl');
 
 // Free tier: 1500 tweets/month. Track usage.
 const MONTHLY_LIMIT = 1400; // leave 100 buffer
+const MAX_PAGES = 5; // cap at 500 tweets/endpoint/run to protect free tier budget
 
 // -- Helpers ----------------------------------------------------------------
 
@@ -122,13 +122,21 @@ function currentMonthKey(): string {
 
 // -- X API v2 ---------------------------------------------------------------
 
-async function xGet(path: string, params: Record<string, string> = {}): Promise<unknown> {
+async function xGet(path: string, params: Record<string, string> = {}, attempt = 0): Promise<unknown> {
   const url = new URL(`https://api.x.com/2${path}`);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
 
   const resp = await fetch(url.toString(), {
     headers: { Authorization: `Bearer ${BEARER_TOKEN}` },
   });
+
+  if (resp.status === 429 && attempt < 3) {
+    const retryAfter = parseInt(resp.headers.get('x-rate-limit-reset') ?? resp.headers.get('retry-after') ?? '60', 10);
+    const waitMs = Math.max(retryAfter, 60) * 1000;
+    process.stderr.write(`[x-collector] Rate limited (429). Waiting ${waitMs / 1000}s before retry ${attempt + 1}/3...\n`);
+    await new Promise<void>(r => setTimeout(r, waitMs));
+    return xGet(path, params, attempt + 1);
+  }
 
   if (!resp.ok) {
     const body = await resp.text().catch(() => '');
@@ -163,8 +171,13 @@ async function fetchTweets(
   const userMap = new Map<string, User>();
   let newestId: string | undefined;
   let paginationToken: string | undefined;
+  let pageCount = 0;
 
   do {
+    if (pageCount++ >= MAX_PAGES) {
+      process.stderr.write(`[x-collector] Reached MAX_PAGES (${MAX_PAGES}) for ${endpoint}. Resuming next run.\n`);
+      break;
+    }
     if (paginationToken) params.pagination_token = paginationToken;
 
     const resp = await xGet(path, params) as TweetResponse;
@@ -246,6 +259,10 @@ function buildDigest(
     }
   }
 
+  // Topics Detected placeholder (keyword extraction not yet implemented)
+  lines.push('## Topics Detected', '');
+  lines.push('_Auto-detection not yet implemented._', '');
+
   return lines.join('\n');
 }
 
@@ -283,6 +300,7 @@ async function main(): Promise<void> {
   stats.fetched += timeline.tweets.length;
   stats.skipped += timeline.tweets.length - timelineTweets.length;
   if (timeline.newestId) state.timeline_since_id = timeline.newestId;
+  saveState(state); // checkpoint: save timeline since_id before fetching mentions
 
   // Fetch mentions
   process.stderr.write('[x-collector] Fetching mentions...\n');
@@ -290,6 +308,7 @@ async function main(): Promise<void> {
   const mentionTweets = mentions.tweets;
   stats.fetched += mentions.tweets.length;
   if (mentions.newestId) state.mentions_since_id = mentions.newestId;
+  saveState(state); // checkpoint: save mentions since_id
 
   // Merge user maps
   const allUsers = new Map([...timeline.users, ...mentions.users]);
