@@ -98,7 +98,30 @@
 - Future: narrow VaultBackend cast -- define VaultExecutor interface with only execute()
   (tracked in SAFETY comments in connector.ts and index.ts)
 
+## 2026-04-14 -- Phase 1B: Recipe framework + x-to-vault COMPLETE
+
+### What done
+
+- `recipes/collectors/x-collector.ts`: fix epoch bug (x-rate-limit-reset is Unix epoch,
+  not delta; old code would wait ~54 years). commit 2ed385b
+- `mcp-server/src/recipes/_framework.ts`: removed unused `dirname` import. commit 80eb9dd
+- `mcp-server/src/recipes/_registry.ts`: added lazy cache (module-level `_cache`),
+  `recipesDir` param bypasses cache for tests. commit 03873b3
+- `mcp-server/src/recipes/recipes.test.ts`: 33 unit tests across 7 describe blocks
+  (parseRecipe valid/invalid, getRecipeStatus, runHealthCheck, appendHeartbeat,
+  scanRecipes, findRecipe). Uses node:test + tmpdir isolation. commit a050c0c
+- Karpathy simplicity cleanup: removed speculative `resetRecipeCache` export,
+  removed unimplemented "Topics Detected" placeholder from buildDigest. commit 389f013
+- All 64 tests pass. All 5 commits pushed to GitHub main.
+
+### Outstanding
+
+- Track 6 dedup execution (~65 file deletes in E:/knowledge, awaits Curry authorization)
+- main/master branch strategy decision
+- Optionally push main to gitea mirror
+- Future: narrow VaultBackend cast (VaultExecutor interface -- tracked in SAFETY comments)
+
 ## Next step
 
-- Phase 1B: update .mcp.json to point at new connector/connector.ts, manual test
-- OR continue Track 2b: wire ObsidianAdapter into unifiedQuery score fusion
+- Wire new connector into .mcp.json, manual test (Obsidian open/closed) [Phase 1B original item]
+- OR Track 2b: wire ObsidianAdapter into unifiedQuery score fusion
