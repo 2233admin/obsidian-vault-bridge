@@ -71,7 +71,34 @@
   main = vault-mind headless MCP; same repo, different architectures)
 - Optionally push main to gitea mirror
 
+## 2026-04-13 -- Phase 1A: Contract-first operations.ts COMPLETE
+
+### What done
+
+- Created `mcp-server/src/core/types.ts` -- shared interfaces: Operation, ParamDef,
+  OperationContext, VaultBackend (with execute()), Logger, SearchResult, FileStat, etc.
+- Created `mcp-server/src/core/validate.ts` -- param validation with type coercion
+- Created `mcp-server/src/core/operations.ts` -- 20 vault.* operations, single source of
+  truth; all handlers delegate via ctx.vault.execute()
+- Created `mcp-server/src/connector/ws-transport.ts` -- TS port of JS WsTransport
+- Created `mcp-server/src/connector/fs-transport.ts` -- TS port of JS FsTransport (all 20 cases)
+- Created `mcp-server/src/connector/connector.ts` -- operations-driven MCP connector,
+  raw JSON-RPC 2.0 (no SDK), vault.* only, WS-first/FS-fallback
+- Updated `mcp-server/src/index.ts` -- ListTools/CallTool auto-generated from operations[],
+  VaultFs.execute() added, compile trigger preserved, 4 missing dispatch cases added
+- Deleted `mcp-server/src/connector.js` (original 32KB JS file)
+- All 31 tests pass throughout; typecheck 0 errors
+
+### Outstanding
+
+- Track 6 dedup execution (~65 file deletes in E:/knowledge, awaits Curry authorization)
+- main/master branch strategy decision
+- Optionally push main to gitea mirror
+- Phase 1B: wire new connector into .mcp.json, manual test (Obsidian open/closed)
+- Future: narrow VaultBackend cast -- define VaultExecutor interface with only execute()
+  (tracked in SAFETY comments in connector.ts and index.ts)
+
 ## Next step
 
-- Track 2b: wire ObsidianAdapter into unifiedQuery score fusion + weight config
-- OR pivot to B-line (obsidian-vault-bridge) W8 test gap closure
+- Phase 1B: update .mcp.json to point at new connector/connector.ts, manual test
+- OR continue Track 2b: wire ObsidianAdapter into unifiedQuery score fusion

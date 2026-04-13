@@ -1,140 +1,197 @@
-# Roadmap: vault-mind
+# Roadmap: vault-mind v2
 
-**Created:** 2026-04-07
-**Milestone:** v1.0 -- Knowledge OS MVP
+**Created:** 2026-04-13
+**Milestone:** v2.0 — Knowledge OS with Contract-first + Hybrid Search + Recipes
+
+## Design References
+
+- garrytan/gbrain (7K stars): Contract-first operations, PGLite engine, Recipe pattern, Hybrid Search + RRF
+- 本次设计 session 完整分析: E:/knowledge/05-Engineering/knowledge-os-architecture.drawio
 
 ## Phase Overview
 
-| Phase | Name | Goal | Requirements | Depends |
-|-------|------|------|-------------|---------|
-| 1 | Scaffold + Migrate | Monorepo 结构 + 现有代码迁入 | -- | -- |
-| 2 | MCP Server + Adapters | TS MCP server + adapter 接口 + filesystem adapter | MCP-01~06, ADAPT-01~02 | Phase 1 |
-| 3 | Compiler Auto-Orchestration | compile.py 管线 + 增量编译 + 矛盾检测 | COMP-01~08 | Phase 1 |
-| 4 | Unified Query | 多 adapter 融合查询 + compile triggers | QUERY-01~04, TRIG-01~04, ADAPT-03~05 | Phase 2, 3 |
-| 5 | Agent Scheduler | 自治状态机 + evaluate 决策 + 白天/夜间模式 | AGENT-01~06 | Phase 3, 4 |
-| 6 | Distribution + Skills | setup.sh + skills 迁入 + vault-health + vault-reconcile | DIST-01~04, SKILL-01~03 | Phase 2, 3 |
+| Phase | Name | Goal | 预估 | Depends |
+|-------|------|------|------|---------|
+| 1A | Contract-first | 一个 operations.ts 消灭 15 个重复 tool | 2-3 天 | — |
+| 1B | Recipe 框架 | 数据摄入能力从 0 到 1 (x-to-vault 首发) | 3-4 天 | — |
+| 2 | SearchEngine 抽象 + PGLite | 零配置向量搜索，memU 降级为生产选项 | 1 周 | 1A |
+| 3 | Hybrid Search + RRF | vector + keyword + ripgrep → RRF fusion + dedup | 1 周 | 2 |
+| 4 | 更多 Recipes | email/calendar/wechat-to-vault | 按需 | 1B |
 
-## Phase Details
+## Phase 1A: Contract-first operations.ts
 
-### Phase 1: Scaffold + Migrate
+**Goal:** 单一事实来源——所有 MCP tool 在 operations.ts 定义一次，connector.js 和 vault-mind MCP server 都是消费者。
 
-**Goal:** Monorepo 结构建好，现有代码搬进来，CI 跑通。
+**设计来源:** gbrain `src/core/operations.ts` 的 Operation interface + handler pattern
 
-**Success criteria:**
-- [ ] Monorepo 目录结构 (mcp-server/, compiler/, agent/, adapters/, skills/, hooks/)
-- [ ] connector.js 迁入 mcp-server/src/ (暂保持 JS, Phase 2 重写 TS)
-- [ ] kb_meta.py 迁入 compiler/
-- [ ] 8 skills + 4 hooks 迁入
-- [ ] package.json + pyproject.toml + tsconfig.json
-- [ ] CI: build + typecheck + ruff lint
-- [ ] git commit: initial scaffold
+**核心改动:**
 
-**Worker assignment:** Codex (苦力活, Claude review)
+1. 新建 `mcp-server/src/core/operations.ts`:
+   - 定义 `Operation` interface: `{ name, namespace, description, params, handler, mutating }`
+   - 定义 `ParamDef` interface: `{ type, required, description, default }`
+   - 定义 `OperationContext`: `{ vault, adapters, config, logger, dryRun }`
+   - 导出 `operations: Operation[]` — 所有 30+ tool 的定义和 handler
 
-### Phase 2: MCP Server + Adapters
+2. 重写 `mcp-server/src/mcp/server.ts`:
+   - `ListTools`: 从 `operations[]` 自动生成 MCP inputSchema
+   - `CallTool`: 查找 operation → 验证参数 → 调 handler
 
-**Goal:** connector.js 重写为 TypeScript MCP server, adapter 接口定义, filesystem adapter 实现。
+3. 重写 `connector.js` → `mcp-server/src/connector/connector.ts`:
+   - 从 `operations[]` 过滤 `namespace: 'vault'` → 注册为 MCP tools
+   - 保留双 transport: WS → vault-bridge / FS fallback
+   - 删除 VaultFs 类（合并到 operations handler 里）
 
-**Success criteria:**
-- [ ] mcp-server/src/index.ts -- stdio entry point
-- [ ] vault.* methods 全部迁入 (17 methods)
-- [ ] compile.* methods stub (status, run, diff, abort)
-- [ ] query.* methods stub (unified, search, explain)
-- [ ] agent.* methods stub (status, trigger, schedule, history)
-- [ ] VaultMindAdapter interface (search, read, write, graph, events, init, dispose)
-- [ ] adapter-filesystem 实现 (ripgrep search, fs read/write)
-- [ ] adapter-obsidian 迁入 (WS proxy, 现有逻辑)
-- [ ] Bearer token auth
-- [ ] 现有 198 adversarial tests 迁入并通过
-- [ ] vault-mind.yaml 配置加载
-
-**Worker assignment:** Codex (实现) + Claude (接口设计 review)
-
-### Phase 3: Compiler Auto-Orchestration
-
-**Goal:** kb_meta.py 基础上构建 compile.py, 实现 raw -> concept 全自动管线。
+4. 删除重复代码:
+   - connector.js 的 32KB VaultFs 类
+   - vault-mind index.ts 的 vault.* handler 代码
 
 **Success criteria:**
-- [ ] compile.py 编排: diff -> chunk -> extract -> merge -> write -> index -> report
-- [ ] Chunking: 按 heading/paragraph 切分, configurable size
-- [ ] LLM extraction: concepts[], relationships[], claims[] JSON output
-- [ ] Model tier 可配 (haiku/sonnet/opus via compile-config.yaml)
-- [ ] Merge: 新 concept vs 现有 concept (合并/更新/标注矛盾)
-- [ ] 矛盾检测: Claim 比对, severity 分级, wiki/_contradictions.md
-- [ ] 覆盖度: per-concept source count, low/medium/high tags
-- [ ] 编译报告: sources/concepts/contradictions/broken links
-- [ ] kb_meta.py update-hash + update-index + check-links 自动调用
-- [ ] E2E test: ingest 3 sources -> compile -> verify concepts + contradictions
+- [ ] operations.ts 包含全部 30+ tool 定义
+- [ ] connector 只注册 vault.* namespace（~20 个 tool）
+- [ ] vault-mind MCP server 注册全部 namespace（30+ tool）
+- [ ] 两个 MCP server 的参数/返回值完全一致（从同一份 operations 生成）
+- [ ] 现有 343 tests 全绿
+- [ ] connector.js (旧) 删除，新 connector.ts 替代
 
-**Worker assignment:** Claude (核心 IP) + Gemini (review)
+## Phase 1B: Recipe 框架 + x-to-vault
 
-### Phase 4: Unified Query + Compile Triggers
+**Goal:** 建立 Recipe 摄入框架，实现第一个 recipe (Twitter/X → vault)。
 
-**Goal:** 多 adapter 并行搜索融合返回, 文件变更自动触发编译。
+**设计来源:** gbrain `recipes/` YAML frontmatter + fat markdown + collector pattern
 
-**Success criteria:**
-- [ ] unifiedQuery() 并行调用所有 search-capable adapters
-- [ ] 融合排序: source-weighted merge, 权重可配
-- [ ] 结果标注来源 (adapter name + original path)
-- [ ] adapter 失败不阻塞 (Promise.allSettled)
-- [ ] adapter-memu 实现 (PG query, cosine similarity)
-- [ ] adapter-gitnexus 实现 (MCP 转发)
-- [ ] Compile trigger: vault.create/modify on raw/ -> dirty queue
-- [ ] Trigger: dirty >= 3 -> batch compile
-- [ ] Trigger: vault-ingest -> auto queue
-- [ ] query.unified MCP method 接通 unifiedQuery()
-- [ ] compile.run MCP method 接通 compile.py
+**核心改动:**
 
-**Worker assignment:** Codex (adapter 实现) + Claude (query 逻辑)
+1. 新建 `recipes/` 目录:
+   - `_types.ts`: RecipeFrontmatter interface, RecipeSecret, RecipeStatus
+   - `_framework.ts`: YAML 解析 + 状态管理 + health check runner + heartbeat JSONL
+   - `_registry.ts`: 扫描 recipes/ 下所有 .md → 返回 Recipe[]
 
-### Phase 5: Agent Scheduler
+2. 新建 `recipes/x-to-vault.md`:
+   - YAML frontmatter: id, name, version, category(sense), requires[], secrets(X_BEARER_TOKEN), health_checks
+   - Markdown body: agent 安装指南（step-by-step）
+   - Collector 引用: `recipes/collectors/x-collector.ts`
 
-**Goal:** 自治 agent 根据 vault 状态决定行动, 白天响应 + 夜间主动。
+3. 新建 `recipes/collectors/x-collector.ts`:
+   - X API v2: GET /users/{id}/tweets + /mentions
+   - 输出: `digests/{date}.md` (markdown 摘要) + `raw/{id}.json`
+   - 确定性逻辑: 去噪, 去重, pagination state, rate limit handling
+   - **code for data, LLM for judgment**
 
-**Success criteria:**
-- [ ] scheduler.py 状态机 (IDLE -> EVALUATE -> ACTION -> REPORT -> IDLE)
-- [ ] evaluate.py 决策逻辑 (优先级: dirty -> emerge -> reconcile -> prune -> challenge)
-- [ ] 阈值可配 (vault-mind.yaml: days_since_emerge, orphan_threshold, etc.)
-- [ ] 白天模式: file change -> 标记 dirty, 不主动编译
-- [ ] 夜间模式: 全量 evaluate + 执行所有待办
-- [ ] agent.status() MCP method: 返回 dirty_count, days_since_emerge, unresolved_contradictions, orphan_count
-- [ ] agent.trigger() MCP method: 手动触发指定 action
-- [ ] agent.history() MCP method: 返回最近 N 次 action log
-- [ ] 日志写入 vault log.md
+4. operations.ts 新增 recipe namespace:
+   - `recipe.list`: 列出所有 recipe + 状态
+   - `recipe.show`: 显示某 recipe 的 frontmatter + body
+   - `recipe.status`: 健康检查
+   - `recipe.doctor`: 全面诊断
 
-**Worker assignment:** Claude (状态机设计) + Codex (实现)
-
-### Phase 6: Distribution + Skills
-
-**Goal:** 一键安装, skills 迁入适配 unified query, 新增 vault-health + vault-reconcile。
+5. 新建 `~/.vault-mind/recipes/x-to-vault/`:
+   - `heartbeat.jsonl`: 事件日志
+   - `state.json`: 分页状态、已知 ID
+   - `digests/`: 日期索引的 markdown 摘要
 
 **Success criteria:**
-- [ ] setup.sh: 检测 Node.js/Python/Claude Code/OpenClaw
-- [ ] setup.sh: npm install + pip install
-- [ ] setup.sh: 交互式生成 vault-mind.yaml
-- [ ] setup.sh: 注册 MCP server 到 Claude Code / OpenClaw
-- [ ] setup.sh: 安装 skills
-- [ ] setup.sh: 可选注册 cron hooks
-- [ ] 8 现有 skills 适配 unified query (vault-challenge 引用 _contradictions.md, vault-world L1 拉 adapter 上下文, etc.)
-- [ ] vault-health skill: 孤儿/死链/stale/矛盾/覆盖度/frontmatter/重复/风格 8 类审计
-- [ ] vault-reconcile skill: 矛盾调和工作流
-- [ ] README.md: 安装/使用/架构图/竞品对比
-- [ ] GitHub release v1.0
+- [ ] `recipe.list` 返回 x-to-vault recipe 及其状态
+- [ ] `recipe.show x-to-vault` 返回完整 recipe 内容
+- [ ] x-collector.ts 能拉取 Twitter timeline → 生成 digest
+- [ ] digest 被 compile.py 消费 → 概念提取
+- [ ] heartbeat.jsonl 记录同步事件
+- [ ] recipe.doctor 检查 X_BEARER_TOKEN + API 连通性
 
-**Worker assignment:** Codex (setup.sh + skill 迁入) + Claude (新 skills) + Gemini (README review)
+## Phase 2: SearchEngine 抽象 + PGLite
 
-## MVP Definition
+**Goal:** 引入 SearchEngine 接口 + PGLite 嵌入式引擎，让 vault-mind 零配置就有向量搜索。
 
-**MVP = Phase 1-4 完成。** 此时 vault-mind 已经:
-- 有 MCP server (任何 agent 可接入)
-- 有 adapter 体系 (filesystem 默认, obsidian/memU/gitnexus 可选)
-- 有自动编译管线 (raw -> concept graph)
-- 有统一查询 (多源融合)
+**设计来源:** gbrain `src/core/engine.ts` + `engine-factory.ts` + `pglite-engine.ts`
 
-这就已经超越 obsidian-second-brain -- 他没有编译器, 没有 MCP, 没有统一查询。
+**核心改动:**
 
-Phase 5-6 是 "从能用到好用" 的完善。
+1. 定义 `SearchEngine` interface:
+   - `searchKeyword(query, opts) → SearchResult[]`
+   - `searchVector(embedding, opts) → SearchResult[]`
+   - `upsertChunks(path, chunks) → void`
+   - `deleteChunks(path) → void`
+   - `getStats() → { indexed, embedded }`
 
----
-*Roadmap created: 2026-04-07*
-*Last updated: 2026-04-07 after design spec*
+2. 实现 `PGLiteSearchEngine`:
+   - `@electric-sql/pglite` + pgvector + pg_trgm WASM extensions
+   - `~/.vault-mind/search.db/` 持久化目录
+   - 文件锁防并发
+   - Dynamic import（PGLite ~10MB WASM 只在选用时加载）
+
+3. 实现 `PostgresSearchEngine`:
+   - 迁入现有 memU adapter 的搜索逻辑
+   - 连接外部 PG 实例
+
+4. `NullSearchEngine`:
+   - 所有方法返回空结果
+   - 纯 FS 模式的降级选项
+
+5. `engine-factory.ts`:
+   - `config.searchEngine: 'pglite' | 'postgres' | 'none'`
+   - `createSearchEngine(config) → SearchEngine`
+
+6. Adapter Registry 集成:
+   - `adapter-filesystem` 不变（ripgrep 全文）
+   - `adapter-search` (NEW): 包装 SearchEngine 接口
+   - 替代 `adapter-memu`
+
+**Success criteria:**
+- [ ] `vault-mind init` 默认用 PGLite，2 秒启动
+- [ ] `vault-mind init --postgres` 用外部 PG
+- [ ] PGLite 向量搜索 + 关键词搜索工作
+- [ ] 现有 adapter-filesystem 不受影响
+- [ ] NullSearchEngine 保持 filesystem fallback invariant
+
+## Phase 3: Hybrid Search + RRF
+
+**Goal:** 多信号融合搜索——vector + keyword + ripgrep → RRF → 4-layer dedup。
+
+**设计来源:** gbrain `src/core/search/` + `expansion.ts`
+
+**核心改动:**
+
+1. `search/hybrid.ts`:
+   - 输入: query string + SearchEngine + FilesystemAdapter
+   - Multi-query expansion（可选，需 LLM API key，用最便宜的 Haiku）
+   - 并行: searchVector × N variants + searchKeyword + ripgrep
+   - Promise.allSettled 隔离失败
+   - RRF Fusion (K=60)
+   - 4-layer dedup: by source → by text (Jaccard) → by type (≤60%) → by page
+
+2. `search/expansion.ts`:
+   - 用 Claude Haiku tool_use 生成 2 个替代查询
+   - 短查询 (<3 词) 跳过
+   - 失败降级为原始 query
+
+3. `search/dedup.ts`:
+   - L1: top 3 chunks per source
+   - L2: Jaccard > 0.85 去重
+   - L3: 单类型 ≤ 60%
+   - L4: max 2 chunks per page
+
+4. `query.unified` operation 重写:
+   - 现有的 `unified-query.ts`（score × weight 线性叠加）→ 改用 hybrid search
+   - 保持 adapter 级别的 Promise.allSettled 隔离
+
+5. Graceful degradation 链:
+   - 完整: vector + keyword + ripgrep + expansion → RRF → dedup
+   - 无 LLM: 跳过 expansion
+   - 无 SearchEngine: 跳过 vector + keyword
+   - 纯 FS: ripgrep only
+
+**Success criteria:**
+- [ ] hybrid search 在有 PGLite 时返回融合结果
+- [ ] 无 PGLite 时自动降级为 ripgrep only
+- [ ] expansion 失败不影响搜索
+- [ ] 搜索结果去重有效（无近似重复）
+- [ ] 延迟 < 2s（100 条笔记规模）
+
+## Phase 4: 更多 Recipes (按需)
+
+| Recipe | 数据源 | 优先级 | 前置 |
+|--------|--------|--------|------|
+| wechat-to-vault | Voile QQ/WeChat gateway | 高 | Voile 部署 |
+| email-to-vault | Gmail API / ClawVisor | 中 | credential-gateway |
+| calendar-to-vault | Google Calendar API | 中 | credential-gateway |
+| meeting-to-vault | Circleback 转录 | 低 | — |
+
+每个 recipe 遵循同一模式: collector (code for data) → digest.md → compile.py (LLM for judgment) → vault pages。

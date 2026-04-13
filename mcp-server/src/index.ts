@@ -23,19 +23,13 @@ import { AdapterRegistry } from "./adapters/registry.js";
 import { unifiedQuery } from "./unified-query.js";
 import { CompileTrigger } from "./compile-trigger.js";
 import type { VaultMindAdapter } from "./adapters/interface.js";
+import { operations } from "./core/operations.js";
+import type { OperationContext, Logger, VaultExecutor, VaultMindConfig } from "./core/types.js";
+import { validateParams, rejectDangerousRegex } from "./core/validate.js";
 
 const exec = promisify(execFile);
 
 // Config
-
-interface VaultMindConfig {
-  vault_path: string;
-  auth_token?: string;
-  adapters?: string[];
-  /** Per-adapter score weight multipliers, e.g. { obsidian: 1.2, filesystem: 0.8 } */
-  adapter_weights?: Record<string, number>;
-  config_path?: string;
-}
 
 function loadConfig(): VaultMindConfig {
   const candidates = [
@@ -284,6 +278,7 @@ class VaultFs {
         const max = (p.maxResults as number) || 50;
         let total = 0;
         const flags = p.caseSensitive ? "g" : "gi";
+        if (p.regex) rejectDangerousRegex(p.query as string);
         const escaped = p.regex
           ? (p.query as string)
           : (p.query as string).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -344,7 +339,10 @@ class VaultFs {
             case "lte": match = typeof v === "number" && typeof p.value === "number" && v <= p.value; break;
             case "contains": match = typeof v === "string" && typeof p.value === "string" && v.includes(p.value); break;
             case "regex":
-              try { match = typeof v === "string" && typeof p.value === "string" && new RegExp(p.value).test(v); }
+              try {
+                if (typeof p.value === "string") rejectDangerousRegex(p.value);
+                match = typeof v === "string" && typeof p.value === "string" && new RegExp(p.value).test(v);
+              }
               catch { match = false; }
               break;
           }
@@ -477,9 +475,76 @@ class VaultFs {
           },
         };
       }
+      case "vault.mkdir": {
+        const full = this.resolve(p.path as string);
+        if (existsSync(full)) throw err(-32002, `Already exists: ${p.path}`);
+        if (p.dryRun !== false) return { dryRun: true, action: "mkdir", path: p.path };
+        mkdirSync(full, { recursive: true });
+        return { ok: true, path: p.path };
+      }
+      case "vault.init": {
+        if (!p.topic || typeof p.topic !== "string") throw err(-32602, "topic required");
+        if ((p.topic as string).split("/").some((s: string) => s === ".." || s === "."))
+          throw err(-32602, "path traversal blocked");
+        const created: string[] = [];
+        const skipped: string[] = [];
+        const base = p.topic as string;
+        const now = new Date().toISOString().slice(0, 10);
+        const ensureDir = (rel: string) => {
+          const full = this.resolve(rel);
+          if (existsSync(full)) { skipped.push(rel); return; }
+          mkdirSync(full, { recursive: true });
+          created.push(rel);
+        };
+        const ensureFile = (rel: string, content: string) => {
+          const r = rel.endsWith(".md") ? rel : rel + ".md";
+          const full = this.resolve(r);
+          if (existsSync(full)) { skipped.push(r); return; }
+          mkdirSync(dirname(full), { recursive: true });
+          writeFileSync(full, content, "utf-8");
+          created.push(r);
+        };
+        ensureDir(base);
+        for (const sub of ["raw", "raw/articles", "raw/papers", "raw/notes", "raw/transcripts", "wiki", "wiki/summaries", "wiki/concepts", "wiki/queries", "schema"])
+          ensureDir(`${base}/${sub}`);
+        ensureFile(`${base}/wiki/_index.md`, `---\ntopic: "${p.topic}"\nupdated: ${now}\n---\n\n# ${p.topic} -- Knowledge Index\n\nNo articles compiled yet.\n`);
+        ensureFile(`${base}/wiki/_sources.md`, `---\ntopic: "${p.topic}"\nupdated: ${now}\n---\n\n# Sources\n\nNo sources compiled yet.\n`);
+        ensureFile(`${base}/wiki/_categories.md`, `---\ntopic: "${p.topic}"\nupdated: ${now}\n---\n\n# Categories\n\nAuto-generated during compilation.\n`);
+        ensureFile(`${base}/Log.md`, `# ${p.topic} -- Operation Log\n\n- ${now}: KB initialized\n`);
+        ensureFile(`${base}/schema/CLAUDE.md`, `# ${p.topic} -- KB Schema\n\nFollows llm-wiki opinionated workflow.\nSee root CLAUDE.md for full documentation.\n`);
+        const yamlPath = `${base}/kb.yaml`;
+        if (existsSync(this.resolve(yamlPath))) {
+          skipped.push(yamlPath);
+        } else {
+          writeFileSync(this.resolve(yamlPath), `topic: "${p.topic}"\nvault_path: "${this.vault.replace(/\\\\/g, "/")}"\ncreated: ${now}\n`, "utf-8");
+          created.push(yamlPath);
+        }
+        return { ok: true, topic: p.topic, created, skipped, summary: `Created ${created.length}, skipped ${skipped.length}` };
+      }
+      case "vault.getMetadata": {
+        const full = this.resolve(p.path as string);
+        if (!existsSync(full)) throw err(-32001, `Not found: ${p.path}`);
+        const content = readFileSync(full, "utf-8");
+        const out: Record<string, unknown> = {};
+        const links = this.parseWikilinks(content);
+        if (links.length) out.links = links.map((l) => ({ link: l.link, displayText: l.displayText }));
+        const tags = this.parseTags(content);
+        if (tags.length) out.tags = tags.map((t) => ({ tag: t }));
+        const headings = this.parseHeadings(content);
+        if (headings.length) out.headings = headings;
+        const fm = this.parseFrontmatter(content);
+        if (fm) out.frontmatter = fm;
+        return out;
+      }
+      case "vault.externalSearch":
+        throw err(-32000, "No external search engine configured");
       default:
         throw err(-32601, `Unknown method: ${method}`);
     }
+  }
+
+  async execute(method: string, params: Record<string, unknown>): Promise<unknown> {
+    return this.dispatch(method, params);
   }
 }
 
@@ -641,22 +706,6 @@ function makeAgentDispatch(
 
 function getToolDefinitions() {
   return [
-    { name: "vault.read", description: "Read a note", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
-    { name: "vault.create", description: "Create a new note (dry-run default)", inputSchema: { type: "object", properties: { path: { type: "string" }, content: { type: "string" }, dryRun: { type: "boolean", default: true } }, required: ["path"] } },
-    { name: "vault.modify", description: "Overwrite an existing note", inputSchema: { type: "object", properties: { path: { type: "string" }, content: { type: "string" }, dryRun: { type: "boolean", default: true } }, required: ["path", "content"] } },
-    { name: "vault.append", description: "Append content to a note", inputSchema: { type: "object", properties: { path: { type: "string" }, content: { type: "string" }, dryRun: { type: "boolean", default: true } }, required: ["path", "content"] } },
-    { name: "vault.delete", description: "Delete a note or folder", inputSchema: { type: "object", properties: { path: { type: "string" }, dryRun: { type: "boolean", default: true } }, required: ["path"] } },
-    { name: "vault.rename", description: "Rename or move a file", inputSchema: { type: "object", properties: { from: { type: "string" }, to: { type: "string" }, dryRun: { type: "boolean", default: true } }, required: ["from", "to"] } },
-    { name: "vault.search", description: "Fulltext search across vault", inputSchema: { type: "object", properties: { query: { type: "string" }, regex: { type: "boolean" }, caseSensitive: { type: "boolean" }, maxResults: { type: "integer", default: 50 }, glob: { type: "string" } }, required: ["query"] } },
-    { name: "vault.searchByTag", description: "Find notes with a given tag", inputSchema: { type: "object", properties: { tag: { type: "string" } }, required: ["tag"] } },
-    { name: "vault.searchByFrontmatter", description: "Find notes by frontmatter key-value", inputSchema: { type: "object", properties: { key: { type: "string" }, value: {}, op: { type: "string", default: "eq" } }, required: ["key"] } },
-    { name: "vault.graph", description: "Get the link graph of the vault", inputSchema: { type: "object", properties: { type: { type: "string", default: "both" } } } },
-    { name: "vault.backlinks", description: "Find notes that link to a note", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
-    { name: "vault.batch", description: "Execute multiple vault operations", inputSchema: { type: "object", properties: { operations: { type: "array" }, dryRun: { type: "boolean" } }, required: ["operations"] } },
-    { name: "vault.lint", description: "Check vault health", inputSchema: { type: "object", properties: { requiredFrontmatter: { type: "array", items: { type: "string" } } } } },
-    { name: "vault.list", description: "List files and folders", inputSchema: { type: "object", properties: { path: { type: "string", default: "" } } } },
-    { name: "vault.stat", description: "Get file or folder metadata", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
-    { name: "vault.exists", description: "Check if a path exists", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
     { name: "compile.status", description: "Get compilation status", inputSchema: { type: "object", properties: {} } },
     { name: "compile.run", description: "Run compilation", inputSchema: { type: "object", properties: { topic: { type: "string" } } } },
     { name: "compile.diff", description: "Show compilation diff", inputSchema: { type: "object", properties: { topic: { type: "string" } } } },
@@ -738,6 +787,23 @@ async function main(): Promise<void> {
 
   // --- Dispatchers ---
   const vaultFs = new VaultFs(config.vault_path);
+
+  const stderrLogger: Logger = {
+    info: (msg) => process.stderr.write(`[INFO] ${msg}\n`),
+    warn: (msg) => process.stderr.write(`[WARN] ${msg}\n`),
+    error: (msg) => process.stderr.write(`[ERROR] ${msg}\n`),
+  };
+
+  const vaultOps = operations.filter(op => op.namespace === 'vault');
+
+  const ctx: OperationContext = {
+    vault: vaultFs as VaultExecutor,
+    adapters: registry,
+    config,
+    logger: stderrLogger,
+    dryRun: false,
+  };
+
   const queryDispatch = makeQueryDispatch(registry, config.adapter_weights);
   const compileDispatch = makeCompileDispatch(compileTrigger);
   const agentDispatch = makeAgentDispatch(
@@ -753,7 +819,30 @@ async function main(): Promise<void> {
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    return { tools: getToolDefinitions() };
+    // vault.* tools auto-generated from operations[]
+    const vaultToolDefs = vaultOps.map(op => ({
+      name: op.name,
+      description: op.description,
+      inputSchema: {
+        type: 'object' as const,
+        properties: Object.fromEntries(
+          Object.entries(op.params).map(([k, v]) => [k, {
+            type: v.type,
+            description: v.description,
+            ...(v.default !== undefined ? { default: v.default } : {}),
+            ...(v.enum ? { enum: v.enum } : {}),
+          }])
+        ),
+        required: Object.entries(op.params)
+          .filter(([, v]) => v.required)
+          .map(([k]) => k),
+      },
+    }));
+
+    // compile/query/agent tool defs stay hardcoded
+    const otherToolDefs = getToolDefinitions().filter(t => !t.name.startsWith('vault.'));
+
+    return { tools: [...vaultToolDefs, ...otherToolDefs] };
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -770,12 +859,15 @@ async function main(): Promise<void> {
     try {
       let result: unknown;
       if (toolName.startsWith("vault.")) {
-        result = vaultFs.dispatch(toolName, toolArgs);
-        // Hook write ops into compile trigger
+        const op = vaultOps.find(o => o.name === toolName);
+        if (!op) throw err(-32601, `Unknown vault tool: ${toolName}`);
+        const validatedArgs = validateParams(op.params, toolArgs);
+        result = await op.handler(ctx, validatedArgs);
+        // Hook write ops into compile trigger (preserve existing behavior)
         if (toolName === "vault.create" || toolName === "vault.modify" || toolName === "vault.append") {
-          const path = toolArgs.path as string;
-          if (path && toolArgs.dryRun === false) {
-            compileTrigger.onFileChange(path, toolName === "vault.create" ? "create" : "modify");
+          const p = toolArgs.path as string;
+          if (p && toolArgs.dryRun === false) {
+            compileTrigger.onFileChange(p, toolName === "vault.create" ? "create" : "modify");
           }
         }
       } else if (toolName.startsWith("compile.")) {
