@@ -268,10 +268,6 @@ function buildDigest(
     }
   }
 
-  // Topics Detected placeholder (keyword extraction not yet implemented)
-  lines.push('## Topics Detected', '');
-  lines.push('_Auto-detection not yet implemented._', '');
-
   return lines.join('\n');
 }
 

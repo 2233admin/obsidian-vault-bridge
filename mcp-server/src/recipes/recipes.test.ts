@@ -13,7 +13,7 @@ import { tmpdir, homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
 import { parseRecipe, getRecipeStatus, runHealthCheck, appendHeartbeat } from './_framework.js';
-import { scanRecipes, findRecipe, resetRecipeCache } from './_registry.js';
+import { scanRecipes, findRecipe } from './_registry.js';
 import type { Recipe } from './_types.js';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -405,7 +405,6 @@ describe('scanRecipes', () => {
   beforeEach(() => {
     dir = makeTempDir();
     tempDirs.push(dir);
-    resetRecipeCache(); // ensure cache doesn't bleed between tests
   });
 
   test('returns [] for non-existent directory', () => {
@@ -477,7 +476,6 @@ describe('findRecipe', () => {
   beforeEach(() => {
     dir = makeTempDir();
     tempDirs.push(dir);
-    resetRecipeCache();
   });
 
   test('finds recipe by id', () => {
