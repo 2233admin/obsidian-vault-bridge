@@ -17,6 +17,7 @@ import { FilesystemAdapter } from "./adapters/filesystem.js";
 import { MemUAdapter } from "./adapters/memu.js";
 import { GitNexusAdapter } from "./adapters/gitnexus.js";
 import { ObsidianAdapter } from "./adapters/obsidian.js";
+import { VaultBrainAdapter } from "./adapters/vaultbrain/index.js";
 import { AdapterRegistry } from "./adapters/registry.js";
 import { CompileTrigger } from "./compile-trigger.js";
 import type { VaultMindAdapter } from "./adapters/interface.js";
@@ -564,7 +565,7 @@ async function main(): Promise<void> {
   }
 
   // Optional adapters -- init gracefully, don't block if unavailable
-  const enabledAdapters = new Set(config.adapters ?? ["filesystem", "memu", "gitnexus", "obsidian"]);
+  const enabledAdapters = new Set(config.adapters ?? ["filesystem", "memu", "gitnexus", "obsidian", "vaultbrain"]);
 
   if (enabledAdapters.has("memu")) {
     const memuAdapter = new MemUAdapter();
@@ -584,6 +585,19 @@ async function main(): Promise<void> {
     if (obsAdapter.isAvailable) registry.register(obsAdapter);
   }
 
+  let vaultBrainAdapter: VaultBrainAdapter | null = null;
+  if (enabledAdapters.has("vaultbrain")) {
+    const vbAdapter = new VaultBrainAdapter();
+    try {
+      await vbAdapter.init();
+      registry.register(vbAdapter);
+      vaultBrainAdapter = vbAdapter;
+      process.stderr.write("vault-mind: [vaultbrain] adapter ready\n");
+    } catch (e) {
+      process.stderr.write(`vault-mind: [vaultbrain] init failed (continuing without): ${(e as Error).message}\n`);
+    }
+  }
+
   // --- Compile trigger ---
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const compilerPath = resolve(__dirname, "../../compiler");
@@ -600,6 +614,15 @@ async function main(): Promise<void> {
     obsidianAdapter.onFileChange((e) => {
       if (e.type === "create" || e.type === "modify") {
         compileTrigger.onFileChange(e.path, e.type);
+        if (vaultBrainAdapter && e.path.endsWith(".md")) {
+          try {
+            const fullPath = join(config.vault_path, e.path.replace(/\\/g, "/"));
+            const content = readFileSync(fullPath, "utf-8");
+            vaultBrainAdapter.ingest(e.path, content).catch((err) =>
+              process.stderr.write(`vault-mind: [vaultbrain] ingest error: ${(err as Error).message}\n`)
+            );
+          } catch { /* file may not exist yet */ }
+        }
       }
     });
   }
@@ -684,6 +707,15 @@ async function main(): Promise<void> {
         const p = toolArgs.path as string;
         if (p && toolArgs.dryRun === false) {
           compileTrigger.onFileChange(p, toolName === "vault.create" ? "create" : "modify");
+          if (vaultBrainAdapter && p.endsWith(".md")) {
+            try {
+              const fullPath = join(config.vault_path, p.replace(/\\/g, "/"));
+              const content = readFileSync(fullPath, "utf-8");
+              vaultBrainAdapter.ingest(p, content).catch((err) =>
+                process.stderr.write(`vault-mind: [vaultbrain] ingest error: ${(err as Error).message}\n`)
+              );
+            } catch { /* ignore */ }
+          }
         }
       }
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
