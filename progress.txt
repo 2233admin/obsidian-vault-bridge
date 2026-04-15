@@ -175,9 +175,57 @@
 - Optionally push main to gitea mirror
 - Future: narrow VaultBackend cast (VaultExecutor interface)
 
+## 2026-04-15 -- Batch collector session: 5 new sources COMPLETE
+
+### What done
+
+- `recipes/collectors/napcat-collector.ts`: OneBot v11 HTTP (NapCatQQ)
+  - NAPCAT_URL (default localhost:3000) + NAPCAT_TOKEN (required)
+  - POST /get_group_list -> auto-discover groups; POST /get_group_msg_history
+  - CQ segment extraction: text/at/@name/image/record/face
+  - since_time cursor per group; warns retcode=100 (not in group)
+- `recipes/collectors/linear-collector.ts`: Linear GraphQL
+  - LINEAR_API_KEY (lin_api_xxx) + LINEAR_TEAMS optional filter
+  - Full pagination via pageInfo.hasNextPage
+  - Issues grouped by state type; priority emoji P0-P4
+  - Single last_run ISO cursor
+- `recipes/collectors/wechatmsg-collector.ts`: WeChatMsg local HTTP
+  - WECHATMSG_URL (default localhost:5000), no auth
+  - GET /api/getContactList (Type=2 groups) + GET /api/getChatHistory/{username}
+  - Newest-first history; full pagination first run, page-1 incremental
+  - since_time cursor per contact
+- `recipes/collectors/astrbot-collector.ts`: AstrBot SQLite (bun:sqlite)
+  - ASTRBOT_DATA_DIR (default ~/AstrBot/data); zero HTTP deps
+  - Runtime PRAGMA table_info schema inspection (no hardcoded table name)
+  - Graceful fallback for missing role/platform/sender_id columns
+  - Single since_time cursor across all sessions
+- `recipes/collectors/weflow-collector.ts`: WeFlow WeChat HTTP
+  - WEFLOW_URL (default localhost:9898) + optional WEFLOW_TOKEN
+  - Two-attempt discovery: /api/rooms -> /api/contacts fallback
+  - Two-attempt message fetch: since-based -> page-based fallback
+  - since_time cursor per room
+- 5 recipe .md files: napcat/linear/wechatmsg/astrbot/weflow -to-vault.md
+- All 5 transpile-verified (proper error exits on bad/missing credentials)
+- All 64 tests still pass.
+
+### Outstanding
+
+- NapCat activation: install NapCatQQ, set NAPCAT_URL + NAPCAT_TOKEN, run
+- Linear activation: create API key at linear.app/settings/api
+- WeChatMsg activation: install WeChatMsg, start server, run
+- AstrBot activation: set ASTRBOT_DATA_DIR, run
+- WeFlow activation: install WeFlow, start server, run
+- Feishu activation: create app at open.feishu.cn, add bot to groups
+- Voile DB setup (voile-collector ready, awaits docker compose up)
+- Track 6 dedup execution (~65 file deletes in E:/knowledge, awaits Curry authorization)
+- main/master branch strategy decision
+- Optionally push main to gitea mirror
+- Future: narrow VaultBackend cast (VaultExecutor interface)
+
 ## Next step
 
 - gmail-to-vault or circleback-to-vault (Circleback has API key auth, simpler than OAuth)
 - OR Wire new connector into .mcp.json, manual test (Obsidian open/closed)
 - Collector map: x-to-vault (live), voile-to-vault (ready), feishu-to-vault (ready),
+  napcat/linear/wechatmsg/astrbot/weflow (ready, await activation),
   gmail/calendar (needs OAuth gateway), circleback (needs CIRCLEBACK_API_KEY)
