@@ -46,8 +46,8 @@ function parseYaml(text: string): Record<string, unknown> {
     const rest = topMatch[2].trim();
 
     if (rest !== '') {
-      // Inline value
-      result[key] = parseScalar(rest);
+      // Inline value — handle inline empty array []
+      result[key] = rest === '[]' ? [] : parseScalar(rest);
       i++;
     } else {
       // Block: peek at next lines for array or object items

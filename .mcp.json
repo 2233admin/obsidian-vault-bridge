@@ -1,0 +1,18 @@
+[38;5;103m   1[0m [38;5;189m{[0m
+[38;5;103m   2[0m [38;5;189m  "mcpServers": {[0m
+[38;5;103m   3[0m [38;5;189m    "vault-mind": {[0m
+[38;5;103m   4[0m [38;5;189m      "type": "stdio",[0m
+[38;5;103m   5[0m [38;5;189m      "command": "node",[0m
+[38;5;103m   6[0m [38;5;189m      "args": ["mcp-server/dist/index.js"],[0m
+[38;5;103m   7[0m [38;5;189m      "cwd": "D:/projects/obsidian-llm-wiki",[0m
+[38;5;103m   8[0m [38;5;189m      "env": {}[0m
+[38;5;103m   9[0m [38;5;189m    },[0m
+[38;5;103m  10[0m [38;5;189m    "vault-mind-connector": {[0m
+[38;5;103m  11[0m [38;5;189m      "type": "stdio",[0m
+[38;5;103m  12[0m [38;5;189m      "command": "node",[0m
+[38;5;103m  13[0m [38;5;189m      "args": ["mcp-server/dist/connector/connector.js", "E:/knowledge"],[0m
+[38;5;103m  14[0m [38;5;189m      "cwd": "D:/projects/obsidian-llm-wiki",[0m
+[38;5;103m  15[0m [38;5;189m      "env": {}[0m
+[38;5;103m  16[0m [38;5;189m    }[0m
+[38;5;103m  17[0m [38;5;189m  }[0m
+[38;5;103m  18[0m [38;5;189m}[0m
