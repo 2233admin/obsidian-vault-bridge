@@ -38,15 +38,6 @@
   to ~22 lines (est. -2000 tokens/session). Committed separately in home
   config repo.
 
-### Outstanding (unchanged from v1.0 ship)
-
-- Track 6 dedup execution (~65 file deletes in E:/knowledge, awaits
-  Curry authorization)
-- Track 2a adapter-bases implementation (~1 week, biggest v1.1 investment)
-- main/master 分支策略决断 (master = 真正工作线 obsidian-vault-bridge,
-  main = 孤立 v1.0.0 release commit; 两条架构合为同一仓库是历史遗留)
-- Optionally push main to gitea remote as well (mirror)
-
 ## 2026-04-13 -- Track 2a ObsidianAdapter complete
 
 ### What done
@@ -62,14 +53,6 @@
   - 3 suites: unavailable paths (8), mock WS server (11), auth rejection (1)
   - Ports 60001/60002 (Windows reserved range 49876+ was EACCES)
 - Commits: 545996d (impl) + 8efeff0 (tests), pushed to GitHub
-
-### Outstanding
-
-- Track 6 dedup execution (~65 file deletes in E:/knowledge, awaits
-  Curry authorization)
-- main/master branch strategy decision (master = obsidian-vault-bridge,
-  main = vault-mind headless MCP; same repo, different architectures)
-- Optionally push main to gitea mirror
 
 ## 2026-04-13 -- Phase 1A: Contract-first operations.ts COMPLETE
 
@@ -89,15 +72,6 @@
 - Deleted `mcp-server/src/connector.js` (original 32KB JS file)
 - All 31 tests pass throughout; typecheck 0 errors
 
-### Outstanding
-
-- Track 6 dedup execution (~65 file deletes in E:/knowledge, awaits Curry authorization)
-- main/master branch strategy decision
-- Optionally push main to gitea mirror
-- Phase 1B: wire new connector into .mcp.json, manual test (Obsidian open/closed)
-- Future: narrow VaultBackend cast -- define VaultExecutor interface with only execute()
-  (tracked in SAFETY comments in connector.ts and index.ts)
-
 ## 2026-04-14 -- Phase 1B: Recipe framework + x-to-vault COMPLETE
 
 ### What done
@@ -114,13 +88,6 @@
   removed unimplemented "Topics Detected" placeholder from buildDigest. commit 389f013
 - All 64 tests pass. All 5 commits pushed to GitHub main.
 
-### Outstanding
-
-- Track 6 dedup execution (~65 file deletes in E:/knowledge, awaits Curry authorization)
-- main/master branch strategy decision
-- Optionally push main to gitea mirror
-- Future: narrow VaultBackend cast (VaultExecutor interface -- tracked in SAFETY comments)
-
 ## 2026-04-15 -- voile-to-vault recipe COMPLETE
 
 ### What done
@@ -131,23 +98,12 @@
   - Voile DB not yet set up; collector ready to activate when it is
 - `recipes/collectors/voile-collector.ts`: Bun-native Postgres collector
   - `import { sql } from 'bun'` -- zero npm deps, Bun 1.2+ native
-  - Auto-discover channels (SELECT DISTINCT) + VOILE_CHANNELS override (自动+指定)
+  - Auto-discover channels (SELECT DISTINCT) + VOILE_CHANNELS override
   - since_id cursor per channel, checkpoints after each channel
   - Graceful skip if message_topics/message_sentiments not yet populated
   - Graceful error on DB connect failure (exit 1 with helpful message)
 - `recipes/voile-to-vault.md`: recipe frontmatter + setup docs
-- Collector recipe map now: x-to-vault (done), voile-to-vault (done, awaits Voile DB),
-  feishu-to-vault (next), gmail/calendar/circleback (later, need OAuth gateway)
 - All 64 existing tests still pass. commit 83a2355.
-
-### Outstanding
-
-- Voile DB setup: once Voile docker compose is running with data, voile-collector
-  can run immediately (VOILE_DB_URL=postgres://postgres:postgres@localhost:5432/voile)
-- Track 6 dedup execution (~65 file deletes in E:/knowledge, awaits Curry authorization)
-- main/master branch strategy decision
-- Optionally push main to gitea mirror
-- Future: narrow VaultBackend cast (VaultExecutor interface -- tracked in SAFETY comments)
 
 ## 2026-04-15 -- feishu-to-vault collector COMPLETE
 
@@ -160,104 +116,78 @@
   - Content extraction: text/post (rich text flattened) + media placeholders
   - Graceful skip on code=230002/230003 (bot not in chat or missing scope)
   - Required app scopes: im:message:readonly + im:chat:readonly
-- `recipes/feishu-to-vault.md`: recipe frontmatter + setup docs (app creation,
-  scope setup, bot group onboarding, cron)
+- `recipes/feishu-to-vault.md`: recipe frontmatter + setup docs
 - Transpile verified: auth call reaches Feishu API, correct 10003 on bad creds
 - All 64 existing tests still pass. commit 17b9bf3.
-
-### Outstanding
-
-- Feishu activation: create app at open.feishu.cn, add bot to groups, set
-  FEISHU_APP_ID + FEISHU_APP_SECRET, run collector
-- Voile DB setup (voile-collector ready, awaits docker compose up)
-- Track 6 dedup execution (~65 file deletes in E:/knowledge, awaits Curry authorization)
-- main/master branch strategy decision
-- Optionally push main to gitea mirror
-- Future: narrow VaultBackend cast (VaultExecutor interface)
 
 ## 2026-04-15 -- Batch collector session: 5 new sources COMPLETE
 
 ### What done
 
 - `recipes/collectors/napcat-collector.ts`: OneBot v11 HTTP (NapCatQQ)
-  - NAPCAT_URL (default localhost:3000) + NAPCAT_TOKEN (required)
-  - POST /get_group_list -> auto-discover groups; POST /get_group_msg_history
-  - CQ segment extraction: text/at/@name/image/record/face
-  - since_time cursor per group; warns retcode=100 (not in group)
 - `recipes/collectors/linear-collector.ts`: Linear GraphQL
-  - LINEAR_API_KEY (lin_api_xxx) + LINEAR_TEAMS optional filter
-  - Full pagination via pageInfo.hasNextPage
-  - Issues grouped by state type; priority emoji P0-P4
-  - Single last_run ISO cursor
 - `recipes/collectors/wechatmsg-collector.ts`: WeChatMsg local HTTP
-  - WECHATMSG_URL (default localhost:5000), no auth
-  - GET /api/getContactList (Type=2 groups) + GET /api/getChatHistory/{username}
-  - Newest-first history; full pagination first run, page-1 incremental
-  - since_time cursor per contact
 - `recipes/collectors/astrbot-collector.ts`: AstrBot SQLite (bun:sqlite)
-  - ASTRBOT_DATA_DIR (default ~/AstrBot/data); zero HTTP deps
-  - Runtime PRAGMA table_info schema inspection (no hardcoded table name)
-  - Graceful fallback for missing role/platform/sender_id columns
-  - Single since_time cursor across all sessions
 - `recipes/collectors/weflow-collector.ts`: WeFlow WeChat HTTP
-  - WEFLOW_URL (default localhost:9898) + optional WEFLOW_TOKEN
-  - Two-attempt discovery: /api/rooms -> /api/contacts fallback
-  - Two-attempt message fetch: since-based -> page-based fallback
-  - since_time cursor per room
-- 5 recipe .md files: napcat/linear/wechatmsg/astrbot/weflow -to-vault.md
-- All 5 transpile-verified (proper error exits on bad/missing credentials)
-- All 64 tests still pass.
-
-### Outstanding
-
-- NapCat activation: install NapCatQQ, set NAPCAT_URL + NAPCAT_TOKEN, run
-- Linear activation: create API key at linear.app/settings/api
-- WeChatMsg activation: install WeChatMsg, start server, run
-- AstrBot activation: set ASTRBOT_DATA_DIR, run
-- WeFlow activation: install WeFlow, start server, run
-- Feishu activation: create app at open.feishu.cn, add bot to groups
-- Voile DB setup (voile-collector ready, awaits docker compose up)
-- Track 6 dedup execution (~65 file deletes in E:/knowledge, awaits Curry authorization)
-- main/master branch strategy decision
-- Optionally push main to gitea mirror
-- Future: narrow VaultBackend cast (VaultExecutor interface)
+- 5 recipe .md files: napcat/linear/wechatmsg/astrbot/weflow-to-vault.md
+- All 5 transpile-verified. All 64 tests still pass.
 
 ## 2026-04-15 -- Domestic adaptation COMPLETE (commit 6f6c0e9)
 
 ### What done
 
-Track 1 (compiler presets):
-- `compiler/extractor.py`: replaced TIER_MODELS with PROVIDER_PRESETS dict
-  (anthropic/qwen/doubao/minimax, each with base_url + haiku/sonnet/opus mappings)
-  TIER_MODELS kept as backward-compat alias from PROVIDER_PRESETS["anthropic"]
-  resolve_model(tier, provider) + resolve_provider_url(provider) added
-- `compiler/compile.py`: reads COMPILE_PROVIDER env var (default "anthropic");
-  auto-resolves base_url and model name; no more manual URL wrangling
-  Usage: COMPILE_PROVIDER=qwen OPENAI_API_KEY=sk-xxx python compile.py ...
+- `compiler/extractor.py`: PROVIDER_PRESETS dict (anthropic/qwen/doubao/minimax)
+- `compiler/compile.py`: COMPILE_PROVIDER env var, auto-resolves base_url + model
+- `mcp-server/src/core/operations.ts`: recipe.run operation added
+- `.npmrc` + `bunfig.toml`: npmmirror.com CDN
+- `.env.domestic.example`: one-stop template
 
-Track 2 (recipe.run MCP):
-- `mcp-server/src/core/operations.ts`: added recipe.run operation
-  spawnSync bun collector with secrets pre-check, 120s timeout, 2000-char tail
-  appendHeartbeat records mcp_run events
-  Collector path: {id}.replace(/-to-vault$/, '')-collector.ts
-  64/64 tests still pass
+## 2026-04-15 -- Phase 1B: .mcp.json wired + integration test COMPLETE
 
-Track 3 (deployment config):
-- `.npmrc` + `bunfig.toml`: point npm/bun to npmmirror.com CDN
-- `.env.domestic.example`: one-stop template (COMPILE_PROVIDER + all 8 collector secrets)
+### What done
+
+- `vault-mind.yaml`: created (gitignored) with vault_path: E:/knowledge, filesystem adapter
+- `.mcp.json`: registers two servers:
+  - `vault-mind` (index.js, all ops incl recipe.run, cwd=project root)
+  - `vault-mind-connector` (connector/connector.js, vault.* only, WS/FS fallback)
+- rebuild: dist was stale (recipe.run added in prev session but not compiled)
+- fix: `_framework.ts` parseYaml inline branch: `key: []` now parses as empty array
+  (was returning string "[]", causing astrbot-to-vault + wechatmsg-to-vault to be
+  skipped as malformed on every scan)
+- integration test: `recipe.run {id:"napcat-to-vault"}` returns correct
+  `{"ok":false,"error":"Missing secrets: NAPCAT_TOKEN"}` -- MCP plumbing confirmed
+- 64/64 tests pass. commit a91b239.
+- VaultExecutor task: already done in prior session (VaultExecutor interface in types.ts,
+  as VaultBackend cast no longer exists)
+
+## 2026-04-15 -- Track 6 dedup + circleback-to-vault COMPLETE
+
+### What done
+
+- **Track 6 dedup (E:/knowledge)**: 44/44 files deleted, 0 errors
+  - 33 [archive-copy]: live version exists, archive copy redundant
+  - 5  [archive-dupe]: multiple copies all in archive, keep shortest path
+  - 6  [live-dupe]: same basename in multiple live dirs, keep lowest dir-rank
+  - 5 groups skipped (Excalidraw pairs, test fixtures, diff-name live files)
+  - Script: C:/Users/Administrator/dedup.py (temp, not in project)
+- **circleback-to-vault** (commit f47f8fb):
+  - `recipes/circleback-to-vault.md`: recipe frontmatter, CIRCLEBACK_API_KEY,
+    health check, 3-min setup guide
+  - `recipes/collectors/circleback-collector.ts`: cursor-paginated /v1/notes fetch,
+    incremental sync via state.json last_synced, groups meetings by date, formats
+    summary + attendees + action items, appends if same-day digest already exists
+  - 64/64 tests pass
 
 ### Outstanding
 
-- Collector activation (NapCat/Linear/WeChatMsg/AstrBot/WeFlow/Feishu/Voile DB)
-- Track 6 dedup execution (~65 file deletes in E:/knowledge, awaits Curry authorization)
+- Circleback activation: set CIRCLEBACK_API_KEY, run collector
+- NapCat activation: set NAPCAT_TOKEN + NAPCAT_URL, run recipe.run
+- Feishu/Voile/Linear/WeChatMsg/AstrBot/WeFlow: awaiting activation
 - main/master branch strategy decision
 - Optionally push main to gitea mirror
-- Future: narrow VaultBackend cast (VaultExecutor interface)
 
 ## Next step
 
-- gmail-to-vault or circleback-to-vault (Circleback has API key auth, simpler than OAuth)
-- OR Wire new connector into .mcp.json, manual test (Obsidian open/closed)
-- Collector map: x-to-vault (live), voile-to-vault (ready), feishu-to-vault (ready),
-  napcat/linear/wechatmsg/astrbot/weflow (ready, await activation),
-  gmail/calendar (needs OAuth gateway), circleback (needs CIRCLEBACK_API_KEY)
+- gmail-to-vault (OAuth, harder) or push gitea mirror
+- Collector map complete: x/voile/feishu/napcat/linear/wechatmsg/astrbot/weflow/circleback
+  (9 collectors, all awaiting activation except x which needs X_BEARER_TOKEN)
