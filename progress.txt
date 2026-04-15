@@ -186,8 +186,41 @@
 - main/master branch strategy decision
 - Optionally push main to gitea mirror
 
+## 2026-04-15 -- gmail-to-vault collector COMPLETE
+
+### What done
+
+- `recipes/collectors/gmail-setup.ts`: one-time OAuth 2.0 browser flow
+  - Builds auth URL (access_type=offline, prompt=consent), opens browser cross-platform
+  - Local HTTP server on :9876 captures ?code= callback, 5-min timeout
+  - Exchanges code for tokens; prints `export GMAIL_REFRESH_TOKEN="..."` and exits
+- `recipes/collectors/gmail-collector.ts`: runtime incremental collector
+  - `getAccessToken()`: POST grant_type=refresh_token -> access_token
+  - `listMessages()`: /gmail/v1/users/me/messages?q=QUERY&after=EPOCH
+  - `getMessage()`: format=metadata, extracts From/Subject/Date headers
+  - Groups digest by sender domain (senderDomain extracts @domain.tld)
+  - last_synced cursor in state.json for incremental sync (no duplicates)
+  - Appends to same-day digest if it already exists
+- `recipes/gmail-to-vault.md`: recipe frontmatter + 7-step setup guide
+- Track 6 dedup (E:/knowledge): 44/44 files deleted, 0 errors (done this session)
+- circleback-to-vault: committed this session (commit f47f8fb)
+- All commits pushed to GitHub main (ce99ce0..9ad169e)
+- All 64 existing tests still pass
+
+### Collector inventory (10 sources, all implemented)
+
+x / voile / feishu / napcat / linear / wechatmsg / astrbot / weflow / circleback / gmail
+All awaiting activation (need credentials). X needs X_BEARER_TOKEN.
+
+### Outstanding
+
+- Gmail activation: run gmail-setup.ts to get refresh_token, then set 3 env vars
+- All other collectors: set respective credentials (see each recipe .md)
+- main/master branch strategy decision
+- Optionally push Gitea mirror
+
 ## Next step
 
-- gmail-to-vault (OAuth, harder) or push gitea mirror
-- Collector map complete: x/voile/feishu/napcat/linear/wechatmsg/astrbot/weflow/circleback
-  (9 collectors, all awaiting activation except x which needs X_BEARER_TOKEN)
+- Collector suite is now complete (10 sources). Activate as credentials become available.
+- Consider: Notion (API key, no OAuth) or Google Calendar (reuses Gmail OAuth creds)
+- Or: main/master branch clarification + Gitea mirror push
