@@ -31,3 +31,7 @@ fm_work/
 .dogfood.log
 
 .dogfood.weekly.md
+
+# vault-save session recap markers (per-dev)
+.vault-save.log
+.vault-save.failed.log

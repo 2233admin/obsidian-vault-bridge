@@ -298,6 +298,42 @@ All awaiting activation (need credentials). X needs X_BEARER_TOKEN.
 - Gitea mirror push (optional)
 - main/master branch strategy decision (still deferred)
 
+## 2026-04-20 -- Week 2 Track A /vault-save session-end binding COMPLETE
+
+### What done
+
+- `scripts/hooks/vault-save-hook.py` (stdlib-only, ~170 LOC, non-blocking):
+  - Reads Stop payload, parses transcript JSONL via `transcript_path`
+  - Extracts: user prompts, vault-mind writes, Edit/Write file paths, git commit
+    subjects (regex from Bash `git commit -m "..."`)
+  - Skip criteria: <3 user msgs AND no vault writes AND no file edits AND no
+    commits -> ephemeral, no recap (but mark seen)
+  - Writes recap block to `E:/knowledge/06-Daily/YYYY-MM-DD.md` (appends if
+    exists, creates with frontmatter if missing)
+  - Idempotent via `.vault-save.log` (seen session_ids, per-dev, gitignored)
+  - Failure fallback: `.vault-save.failed.log` (errors never break Claude Code)
+- `.claude/settings.json`: vault-save-hook registered AFTER dogfood-hook in
+  Stop array (same hooks block, sequential execution)
+- `.gitignore`: add `.vault-save.log` + `.vault-save.failed.log`
+- Smoke tests (all pass):
+  1. Substance session (3 prompts + Edit + commit) -> recap written to daily
+  2. Same sid rerun -> no duplicate (idempotent)
+  3. Ephemeral session (1 prompt, no tools) -> skipped, sid still marked seen
+
+### Design notes
+
+- Stop hook runs shell, not Claude -- cannot invoke `/vault-save` slash command
+  directly. Hook does the extraction+write mechanically from the transcript.
+  `skills/vault-save.md` remains as the interactive richer version for manual
+  `/vault-save` invocation; hook is the unattended fallback.
+- Windows Python Path('/tmp/...') quirk discovered during smoke test: Git Bash
+  `/tmp` != Python tmp. Hook uses absolute paths only.
+
+### Outstanding (Week 2 remainder)
+
+- Optionally push to Gitea mirror
+- main/master branch strategy decision (still deferred)
+
 ## Next step
 
 - Track C Compiler: `compiler/link_discovery.py` skeleton

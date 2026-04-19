@@ -18,6 +18,10 @@
           {
             "type": "command",
             "command": "python scripts/hooks/dogfood-hook.py stop"
+          },
+          {
+            "type": "command",
+            "command": "python scripts/hooks/vault-save-hook.py"
           }
         ]
       }
