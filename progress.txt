@@ -432,10 +432,58 @@ All awaiting activation (need credentials). X needs X_BEARER_TOKEN.
 - `.omc/state/*` autogen files tracked in git (pre-existing). Worth
   `git rm --cached` + confirm .gitignore catches them next session.
 
+## 2026-04-20 (late) -- gap closure: MCP exists/stat root + concept_graph tag edges + state untrack
+
+### What done
+
+- `chore(gitignore)`: untracked `.omc/state/hud-state.json`,
+  `.omc/state/hud-stdin-cache.json`, `mcp-server/.omc/state/last-tool-error.json`
+  (tracked before .gitignore rule existed, gitignore is not retroactive).
+  Local hook-generated state no longer pollutes `git status` / diff noise.
+- `fix(mcp)`: extended root-path support from vault.list to vault.exists +
+  vault.stat. Same `normalizeVaultPath({allowRoot: true}) + resolve({allowRoot})`
+  pattern. Enables client bootstrap probe ("does the vault exist and is it
+  readable?") without a dummy subpath. Traversal guards unchanged.
+  `stat("")` returns `{type:'folder', name: basename(vaultPath), children: N}`.
+  + 7 node --test cases in fs-transport.test.ts (exists root x2, exists reject,
+  stat root x2, stat reject, stat nested file). Total: 84/84 tests pass.
+- `feat(compiler)`: concept_graph now emits tag edges. Each node's frontmatter
+  tags materialize as `{src: node_id, dst: 'tag:X', resolved: true, kind: 'tag'}`.
+  Wikilink edges tagged `kind: 'wikilink'` (previously implicit). Stats split
+  `wikilink_edges` + `tag_edges` counts. Consumer synthesizes tag-nodes from
+  distinct dst values where kind=='tag'.
+  + 1 new test case; all 14 tests pass in 0.16s.
+  Smoke on E:/knowledge: scanned=554 nodes=554 edges=2507 (wikilink=523
+  tag=1984) unresolved=120. ~3.6 tags per node, matches vault reality.
+
+### Cold-verification (per codex-dual-verify rule)
+
+All MCP fixes verified independently via JSON-RPC roundtrip, not trusting
+Codex or Claude own-report:
+- `vault.exists({path:'' | '.'})` -> `{exists: true}`
+- `vault.stat({path:''})` -> `{type:'folder', name:'knowledge', children:31}`
+- `vault.exists({path:'../etc'})` -> blocked
+- `vault.stat({path:'../etc'})` -> blocked
+
+### Commits this block
+
+- `chore(gitignore):` untrack .omc/state autogen files
+- `fix(mcp):` extend root-path support to vault.exists and vault.stat
+- `feat(compiler):` emit tag edges in concept_graph (v0.2)
+- `docs(progress):` 2026-04-20 late -- gap closure
+
+### Outstanding
+
+- `link_discovery --with-llm` still stubbed (Phase 2, deferred)
+- link_discovery stopword/generality filter deferred pending dogfooding
+  noise data (by design -- let noise tell us which filters matter)
+- 120 unresolved concept_graph edges are cleanup surface for the vault,
+  not a bug
+
 ## Next step
 
-- Phase 1.5 concept_graph: tag edges + basic stopword/generality filter in
-  link_discovery (`claude`, `skills`, `findings` noise observed on full vault
-  run -- Karpathy-style: let the noise tell you which filter matters, now
-  we have a week of data)
+- Phase 2 link_discovery: LLM-backed concept suggestion pass (requires
+  extractor.py reuse + cost caps)
+- Or: build a first consumer of graph.json (viz? backlink MCP tool? vault
+  health report?) -- graph is now rich enough (2507 edges) to drive one
 - Roadmap file: C:/Users/Administrator/.claude/plans/breezy-stargazing-chipmunk.md
