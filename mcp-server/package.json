@@ -1,7 +1,7 @@
 {
   "name": "@obsidian-llm-wiki/mcp",
   "version": "0.1.0",
-  "description": "Knowledge OS MCP server -- unified vault operations, compilation, and query",
+  "description": "A faithful reference implementation of Karpathy's LLM Wiki pattern -- headless-first MCP server, plain markdown, no embeddings required, Obsidian-native.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
