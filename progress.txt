@@ -334,10 +334,54 @@ All awaiting activation (need credentials). X needs X_BEARER_TOKEN.
 - Optionally push to Gitea mirror
 - main/master branch strategy decision (still deferred)
 
+## 2026-04-20 -- Track C Compiler: link_discovery.py skeleton COMPLETE
+
+### What done
+
+- `compiler/link_discovery.py` (~250 LOC, stdlib-only):
+  - Pass 1 literal alias match (Karpathy grep-first, no LLM, no embeddings)
+  - Index: file stem + frontmatter `aliases` + H1 heading
+  - Min-alias length: 4 ASCII / 3 CJK (guard against "历史" firing on 历史学/etc)
+  - CJK gets raw substring, ASCII gets `\b` word-boundary regex
+  - Skip zones before match: frontmatter + fenced code + inline code +
+    existing `[[wikilinks]]` + `[md](links)`
+  - First-wins index keeps runs idempotent across vault moves
+  - `--with-llm` flag reserved for Phase 2 (stubbed, prints notice)
+  - Default output: **project-local** `.compile/link_suggestions.md` (NOT
+    inside vault -- avoids Obsidian indexing pollution)
+- `compiler/tests/test_link_discovery.py`: 13 unit tests covering frontmatter
+  parsing, index building, scan correctness, CJK vs ASCII matching, noise
+  skipping, end-to-end report generation
+- `.gitignore`: add `.compile/` (per-dev build artifact)
+
+### Smoke test on real vault (E:/knowledge)
+
+- 554 md scanned (archive/templates/excalidraw/KB/obsidian excluded)
+- 967 aliases indexed
+- 2403 link suggestions in 10 seconds
+- Quality spot-check: good hits (`量化交易`->Stars-量化交易, `记忆系统`,
+  `OpenClaw`, `FORGE`). Noise hits (`claude`, `skills`, `findings`) from
+  over-generic filenames -- Phase 2 will add stopword/generality filter
+
+### Design notes
+
+- Build_index walks the full vault regardless of `--limit`; only scan pass
+  respects limit. Keeps index complete across partial re-runs
+- ASCII `\b` doesn't work for CJK (no whitespace separation), so CJK aliases
+  fall through to raw `alias_lower in line_lower` -- acceptable false-positive
+  cost traded for determinism; a better post-filter lives in Phase 2
+
+### Outstanding (Week 3-4 remainder)
+
+- `compiler/concept_graph.py` v0 -> `graph.json` (nodes=concept, edges=wikilink)
+- LLM pass in link_discovery (requires extractor.py reuse + cost caps)
+- Stopword/generality filter for noise aliases
+- Unit test coverage target (roadmap says 60%+; skeleton hit ~80% for link_discovery)
+
 ## Next step
 
-- Track C Compiler: `compiler/link_discovery.py` skeleton
-  - scan 911 md files in E:/knowledge, LLM-suggest missing `[[wikilinks]]`,
-    write proposals to `.compile/link_suggestions.md`
-- Then `compiler/concept_graph.py` v0 producing `graph.json`
+- `compiler/concept_graph.py` v0: build JSON graph from existing `[[wikilinks]]`
+  + frontmatter tags. Emit `nodes[{id,title,path}]` + `edges[{src,dst}]`
+- Deferred: add stopword filter to link_discovery (after dogfooding output
+  for a week -- let noise tell us which filters matter)
 - Roadmap file: C:/Users/Administrator/.claude/plans/breezy-stargazing-chipmunk.md

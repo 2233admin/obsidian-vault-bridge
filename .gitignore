@@ -35,3 +35,6 @@ fm_work/
 # vault-save session recap markers (per-dev)
 .vault-save.log
 .vault-save.failed.log
+
+# link_discovery output (per-dev, regenerate with compiler/link_discovery.py)
+.compile/
