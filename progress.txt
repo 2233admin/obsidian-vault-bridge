@@ -378,10 +378,64 @@ All awaiting activation (need credentials). X needs X_BEARER_TOKEN.
 - Stopword/generality filter for noise aliases
 - Unit test coverage target (roadmap says 60%+; skeleton hit ~80% for link_discovery)
 
+## 2026-04-20 (evening) -- concept_graph.py v0 + MCP root-listing fix
+
+### What done
+
+- `compiler/concept_graph.py` (~200 LOC, stdlib-only):
+  - Walks vault md, extracts `[[wikilinks]]` (strips fences, inline code,
+    frontmatter), emits `graph.json` with `{nodes, edges, stats}`
+  - Node: `{id, title, path, tags}` (id = vault-relative posix path)
+  - Edge: `{src, dst, resolved}` -- unresolved links kept as edges with
+    `resolved=false` so dangling references stay visible
+  - Resolution via stem + frontmatter aliases + H1 (first-wins, case-insensitive)
+  - Tags pulled from frontmatter (bracket + bullet list YAML subset, reuses
+    link_discovery parser shape)
+- `compiler/tests/test_concept_graph.py`: 13 unit tests (5 extract, 3 tags,
+  4 build_graph, 1 e2e) -- all pass, 0.18s
+- Smoke on real vault (E:/knowledge): 554 nodes / 523 edges / 120 unresolved
+  in ~3s. Unresolved mostly pinyin-kebab stubs (xiang-mu-quan-jing etc.) --
+  worth a cleanup backlog, not a bug.
+
+### MCP vault.list root bug (dispatched to Codex, cold-verified by Claude)
+
+- Repro: `vault.list({path:""})` -> "path required";
+  `vault.list({path:"."})` -> "path traversal blocked"
+- Root cause: `resolvePath` rejected empty + `.` before allowing either as
+  "list vault root". Same bug lived in both `src/index.ts` (stdio MCP) and
+  `src/connector/fs-transport.ts` (connector transport) -- Codex found and
+  fixed both.
+- Fix: split `resolvePath` into `normalizeVaultPath(opts: {allowRoot?})` +
+  `resolve(opts: {allowRoot?})`; `vault.list` opts into `allowRoot`, other
+  tools stay strict. Also replaced `full.startsWith(vault)` guard with
+  `path.relative(vault, full).startsWith('..')` -- correct idiom on
+  case-insensitive Windows FS, free hardening.
+- Tests: 7 new node --test cases in `src/connector/fs-transport.test.ts`
+  (root list x3, traversal reject x3, nested unchanged x1). Total mcp-server
+  tests: 77/77 pass (cold-verified via `npm test` independently of Codex).
+- Smoke (cold-verified by Claude): JSON-RPC roundtrip of `vault.list` with
+  `{"":...,".":...,"/":...,"./":...}` all return real vault root;
+  `{..:...,"C:/Windows":...,"../":...,"../etc":...}` all still blocked.
+
+### Commits this session
+
+- `fix(mcp): accept empty/root paths in vault.list, harden traversal guard`
+- `feat(compiler): concept_graph.py v0 wikilink graph (stdlib-only)`
+- `docs(progress): 2026-04-20 evening -- concept_graph + MCP root-listing fix`
+
+### Outstanding
+
+- `concept_graph.py` v0 is wikilink-only. Tags collected on nodes but no
+  tag-edges yet. Phase 1.5: emit `{src: node, dst: 'tag:X', kind: 'tag'}`
+  edges + a `tags[]` node list -> consumer can build cluster/facet views.
+- `link_discovery --with-llm` still stubbed (Phase 2)
+- `.omc/state/*` autogen files tracked in git (pre-existing). Worth
+  `git rm --cached` + confirm .gitignore catches them next session.
+
 ## Next step
 
-- `compiler/concept_graph.py` v0: build JSON graph from existing `[[wikilinks]]`
-  + frontmatter tags. Emit `nodes[{id,title,path}]` + `edges[{src,dst}]`
-- Deferred: add stopword filter to link_discovery (after dogfooding output
-  for a week -- let noise tell us which filters matter)
+- Phase 1.5 concept_graph: tag edges + basic stopword/generality filter in
+  link_discovery (`claude`, `skills`, `findings` noise observed on full vault
+  run -- Karpathy-style: let the noise tell you which filter matters, now
+  we have a week of data)
 - Roadmap file: C:/Users/Administrator/.claude/plans/breezy-stargazing-chipmunk.md
