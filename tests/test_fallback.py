@@ -6,8 +6,11 @@ when the Obsidian WebSocket server is unreachable.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
+import vault_bridge
 from vault_bridge import VaultBridge, _FilesystemFallback
 
 
@@ -145,6 +148,28 @@ async def test_delete_directory_raises(vault):
 def test_is_filesystem_mode_false_before_connect(vault):
     vb = VaultBridge("ws://127.0.0.1:1", "fake-token", vault_path=str(vault))
     assert vb.is_filesystem_mode() is False
+
+
+# ---------- from_discovery() reads vault field ----------
+
+
+def test_from_discovery_picks_up_vault_field(vault, tmp_path, monkeypatch):
+    port_file = tmp_path / "port.json"
+    port_file.write_text(
+        json.dumps({"port": 1, "token": "t", "vault": str(vault)}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(vault_bridge, "DISCOVERY_FILE", port_file)
+    vb = VaultBridge.from_discovery()
+    assert vb._vault_path == vault.resolve()
+
+
+def test_from_discovery_without_vault_field(tmp_path, monkeypatch):
+    port_file = tmp_path / "port.json"
+    port_file.write_text(json.dumps({"port": 1, "token": "t"}), encoding="utf-8")
+    monkeypatch.setattr(vault_bridge, "DISCOVERY_FILE", port_file)
+    vb = VaultBridge.from_discovery()
+    assert vb._vault_path is None
 
 
 @pytest.mark.asyncio
