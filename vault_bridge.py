@@ -248,6 +248,8 @@ class VaultBridge:
         self._closed = False
         self._event_handlers: dict[str, list[Callable]] = {}
         self._fallback: _FilesystemFallback | None = None
+        self._sticky_subscriptions: list[str] = []
+        self._reconnecting: bool = False
 
     @classmethod
     def from_discovery(cls, *, timeout: float = DEFAULT_TIMEOUT) -> VaultBridge:
@@ -271,7 +273,9 @@ class VaultBridge:
             raise ImportError("pip install websockets")
         self._closed = False
         try:
-            self._ws = await websockets.connect(self._url)
+            self._ws = await websockets.connect(
+                self._url, ping_interval=20, ping_timeout=10
+            )
         except Exception as exc:
             if self._should_use_filesystem_fallback(exc, websockets):
                 vault_path = self._require_vault_path()
@@ -303,6 +307,88 @@ class VaultBridge:
 
     def is_filesystem_mode(self) -> bool:
         return self._fallback is not None
+
+    async def connect_with_retry(self, max_attempts: int = 6) -> dict:
+        """Connect with exponential backoff; fall back to filesystem when exhausted.
+
+        Backoff schedule: 1s, 2s, 4s, 8s, 16s, 30s (capped at 30 for later attempts).
+        If all attempts raise AND vault_path is set, returns a filesystem-mode result
+        (same shape as connect() fallback). Otherwise re-raises the last exception.
+
+        NOTE: connect() itself still falls back IMMEDIATELY on a single failure --
+        that's the dreamtime-cron contract (Gap 3). Use this method only when the
+        caller actually wants to wait for a flaky server to come back (long-lived
+        clients, reconnect loops).
+        """
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be >= 1")
+        delays = [1, 2, 4, 8, 16, 30]
+        last_exc: Exception | None = None
+        for attempt in range(max_attempts):
+            try:
+                return await self.connect()
+            except Exception as exc:
+                last_exc = exc
+                if attempt == max_attempts - 1:
+                    break
+                delay = delays[min(attempt, len(delays) - 1)]
+                LOGGER.warning(
+                    "connect attempt %d/%d failed (%s); retrying in %ds",
+                    attempt + 1,
+                    max_attempts,
+                    exc,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+
+        # Exhausted. Fall back to filesystem if we can; else re-raise.
+        if self._vault_path is not None:
+            self._ws = None
+            self._fallback = _FilesystemFallback(self._vault_path)
+            LOGGER.warning(
+                "connect_with_retry exhausted after %d attempts -- falling back to "
+                "filesystem mode at %s",
+                max_attempts,
+                self._vault_path,
+            )
+            return {
+                "ok": True,
+                "mode": "filesystem",
+                "note": "Obsidian not running -- limited operations available",
+            }
+        assert last_exc is not None  # loop guarantees this
+        raise last_exc
+
+    async def _reconnect_loop(self) -> None:
+        """Background reconnect on unintentional WS drop.
+
+        Triggered by _listen() when the socket closes without an explicit close()
+        call. Runs connect_with_retry(), replays sticky subscriptions, and exits.
+        In-flight calls have already been failed by _listen() before we get here
+        (friction #2 decision: no id survives reconnect, caller retries).
+        """
+        if self._reconnecting:
+            return
+        self._reconnecting = True
+        try:
+            LOGGER.warning("WebSocket dropped -- reconnecting")
+            result = await self.connect_with_retry()
+            if result.get("mode") == "filesystem":
+                return  # connect_with_retry already logged the fallback
+            if self._sticky_subscriptions:
+                try:
+                    await self.call(
+                        "events.subscribe",
+                        {"patterns": list(self._sticky_subscriptions)},
+                    )
+                    LOGGER.info(
+                        "replayed %d sticky subscriptions after reconnect",
+                        len(self._sticky_subscriptions),
+                    )
+                except Exception as exc:
+                    LOGGER.error("sticky-subscription replay failed: %s", exc)
+        finally:
+            self._reconnecting = False
 
     async def call(self, method: str, params: dict | None = None) -> Any:
         if self._closed or self._ws is None:
@@ -344,11 +430,23 @@ class VaultBridge:
         except asyncio.CancelledError:
             pass
         except Exception as exc:
-            self._closed = True
+            # Fail all pending with a reconnect-hint error (friction #2 decision:
+            # caller-supplied ids can't survive reconnect, so we drain immediately
+            # and let the caller retry).
             for fut in self._pending.values():
                 if not fut.done():
                     fut.set_exception(ConnectionError(f"WebSocket closed: {exc}"))
             self._pending.clear()
+
+            intentional = self._closed
+            self._ws = None
+            if intentional or self._reconnecting:
+                # Caller invoked close(), or another reconnect is already in flight.
+                self._closed = True
+                return
+            # Unintentional drop (NAT timeout, server restart, suspended laptop,
+            # ConnectionClosedError). Kick off background reconnect.
+            asyncio.create_task(self._reconnect_loop())
 
     # -- events (Phase 4 ready) ------------------------------------------
 
@@ -521,10 +619,20 @@ class VaultBridge:
     # -- subscriptions (Phase 4) -----------------------------------------
 
     async def subscribe(self, events: list[str]) -> dict:
-        return await self.call("events.subscribe", {"patterns": events})
+        result = await self.call("events.subscribe", {"patterns": events})
+        # Sticky: remember so _reconnect_loop can replay after reconnect.
+        for pattern in events:
+            if pattern not in self._sticky_subscriptions:
+                self._sticky_subscriptions.append(pattern)
+        return result
 
     async def unsubscribe(self, events: list[str]) -> dict:
-        return await self.call("events.unsubscribe", {"patterns": events})
+        result = await self.call("events.unsubscribe", {"patterns": events})
+        drop = set(events)
+        self._sticky_subscriptions = [
+            pattern for pattern in self._sticky_subscriptions if pattern not in drop
+        ]
+        return result
 
     async def list_events(self) -> dict:
         return await self.call("events.list")

@@ -7,6 +7,7 @@ when the Obsidian WebSocket server is unreachable.
 from __future__ import annotations
 
 import json
+import unittest.mock as mock
 
 import pytest
 
@@ -170,6 +171,132 @@ def test_from_discovery_without_vault_field(tmp_path, monkeypatch):
     monkeypatch.setattr(vault_bridge, "DISCOVERY_FILE", port_file)
     vb = VaultBridge.from_discovery()
     assert vb._vault_path is None
+
+
+# ---------- EVNT-03: connect_with_retry + sticky subs ----------
+
+
+@pytest.fixture(autouse=False)
+def _fast_sleep(monkeypatch):
+    """Neutralise asyncio.sleep inside vault_bridge so backoff tests are instant."""
+    async def _instant(_):
+        return None
+    monkeypatch.setattr(vault_bridge.asyncio, "sleep", _instant)
+
+
+@pytest.mark.asyncio
+async def test_connect_with_retry_succeeds_after_transient_failure(vault, _fast_sleep):
+    vb = VaultBridge("ws://127.0.0.1:1", "fake-token", vault_path=str(vault))
+    calls = {"n": 0}
+
+    async def fake_connect():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise ConnectionRefusedError("boom")
+        return {"ok": True, "mode": "websocket"}
+
+    with mock.patch.object(vb, "connect", side_effect=fake_connect):
+        result = await vb.connect_with_retry(max_attempts=6)
+    assert calls["n"] == 3
+    assert result["mode"] == "websocket"
+
+
+@pytest.mark.asyncio
+async def test_connect_with_retry_exhausts_falls_back_to_filesystem(vault, _fast_sleep):
+    vb = VaultBridge("ws://127.0.0.1:1", "fake-token", vault_path=str(vault))
+
+    async def always_fail():
+        raise ConnectionRefusedError("down")
+
+    with mock.patch.object(vb, "connect", side_effect=always_fail):
+        result = await vb.connect_with_retry(max_attempts=3)
+    assert result == {
+        "ok": True,
+        "mode": "filesystem",
+        "note": "Obsidian not running -- limited operations available",
+    }
+    assert vb.is_filesystem_mode() is True
+
+
+@pytest.mark.asyncio
+async def test_connect_with_retry_exhausts_without_vault_path_raises(_fast_sleep):
+    vb = VaultBridge("ws://127.0.0.1:1", "fake-token")  # no vault_path
+
+    async def always_fail():
+        raise ConnectionRefusedError("down")
+
+    with mock.patch.object(vb, "connect", side_effect=always_fail):
+        with pytest.raises(ConnectionRefusedError, match="down"):
+            await vb.connect_with_retry(max_attempts=2)
+
+
+@pytest.mark.asyncio
+async def test_connect_with_retry_rejects_zero_attempts():
+    vb = VaultBridge("ws://127.0.0.1:1", "fake-token")
+    with pytest.raises(ValueError, match="max_attempts"):
+        await vb.connect_with_retry(max_attempts=0)
+
+
+@pytest.mark.asyncio
+async def test_subscribe_stores_sticky_and_dedupes(vault):
+    vb = VaultBridge("ws://127.0.0.1:1", "fake-token", vault_path=str(vault))
+    with mock.patch.object(vb, "call", return_value={"ok": True}):
+        await vb.subscribe(["KB/**", "Daily/**"])
+        await vb.subscribe(["KB/**", "Inbox/**"])  # KB/** is duplicate
+    assert vb._sticky_subscriptions == ["KB/**", "Daily/**", "Inbox/**"]
+
+
+@pytest.mark.asyncio
+async def test_unsubscribe_removes_sticky(vault):
+    vb = VaultBridge("ws://127.0.0.1:1", "fake-token", vault_path=str(vault))
+    with mock.patch.object(vb, "call", return_value={"ok": True}):
+        await vb.subscribe(["KB/**", "Daily/**", "Inbox/**"])
+        await vb.unsubscribe(["Daily/**"])
+    assert vb._sticky_subscriptions == ["KB/**", "Inbox/**"]
+
+
+@pytest.mark.asyncio
+async def test_reconnect_loop_replays_sticky_subscriptions(vault, _fast_sleep):
+    vb = VaultBridge("ws://127.0.0.1:1", "fake-token", vault_path=str(vault))
+    vb._sticky_subscriptions = ["KB/**", "Daily/**"]
+
+    replayed: list[tuple[str, dict]] = []
+
+    async def fake_connect():
+        return {"ok": True, "mode": "websocket"}
+
+    async def fake_call(method, params=None):
+        replayed.append((method, params))
+        return {"ok": True}
+
+    with mock.patch.object(vb, "connect", side_effect=fake_connect):
+        with mock.patch.object(vb, "call", side_effect=fake_call):
+            await vb._reconnect_loop()
+
+    assert replayed == [("events.subscribe", {"patterns": ["KB/**", "Daily/**"]})]
+    assert vb._reconnecting is False
+
+
+@pytest.mark.asyncio
+async def test_reconnect_loop_skips_replay_when_filesystem_mode(vault, _fast_sleep):
+    vb = VaultBridge("ws://127.0.0.1:1", "fake-token", vault_path=str(vault))
+    vb._sticky_subscriptions = ["KB/**"]
+
+    async def always_fail():
+        raise ConnectionRefusedError("down")
+
+    replayed: list = []
+
+    async def fake_call(method, params=None):
+        replayed.append((method, params))
+        return {"ok": True}
+
+    with mock.patch.object(vb, "connect", side_effect=always_fail):
+        with mock.patch.object(vb, "call", side_effect=fake_call):
+            await vb._reconnect_loop()
+
+    assert replayed == []  # filesystem mode: no server to replay to
+    assert vb.is_filesystem_mode() is True
 
 
 @pytest.mark.asyncio
