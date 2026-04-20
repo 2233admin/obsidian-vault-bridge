@@ -6,12 +6,22 @@ import {
   makeResult,
   makeError,
   makeNotification,
+  RPC_INVALID_PARAMS,
   RPC_METHOD_NOT_FOUND,
   RPC_PERMISSION_DENIED,
 } from "./protocol";
 import type { ClientState } from "./types";
+import { matchGlob } from "./glob";
 
-export type RpcHandler = (params: Record<string, unknown>) => Promise<unknown> | unknown;
+export interface RpcHandlerContext {
+  ws: WebSocket;
+  state: ClientState;
+}
+
+export type RpcHandler = (
+  params: Record<string, unknown>,
+  ctx?: RpcHandlerContext,
+) => Promise<unknown> | unknown;
 
 export class WsServer {
   private httpServer: http.Server | null = null;
@@ -27,6 +37,28 @@ export class WsServer {
       methods: this.getCapabilityList(),
       version: "0.1.0",
     }));
+    this.registerHandler("events.subscribe", (_params, ctx) => {
+      if (!ctx) {
+        throw { code: RPC_INVALID_PARAMS, message: "Session context required" };
+      }
+      const patterns = this.requirePatterns(_params);
+      ctx.state.subscriptions.push(...patterns);
+      return { ok: true, subscriptions: ctx.state.subscriptions };
+    });
+    this.registerHandler("events.unsubscribe", (_params, ctx) => {
+      if (!ctx) {
+        throw { code: RPC_INVALID_PARAMS, message: "Session context required" };
+      }
+      const patterns = new Set(this.requirePatterns(_params));
+      ctx.state.subscriptions = ctx.state.subscriptions.filter((pattern) => !patterns.has(pattern));
+      return { ok: true, subscriptions: ctx.state.subscriptions };
+    });
+    this.registerHandler("events.list", (_params, ctx) => {
+      if (!ctx) {
+        throw { code: RPC_INVALID_PARAMS, message: "Session context required" };
+      }
+      return { subscriptions: ctx.state.subscriptions, totalClients: this.clients.size };
+    });
   }
 
   start(): void {
@@ -45,7 +77,7 @@ export class WsServer {
         return;
       }
 
-      this.clients.set(ws, { authenticated: false });
+      this.clients.set(ws, { authenticated: false, subscriptions: [] });
 
       const authTimer = setTimeout(() => {
         if (!this.clients.get(ws)?.authenticated) {
@@ -110,7 +142,16 @@ export class WsServer {
 
   broadcastEvent(event: string, data: Record<string, unknown>): void {
     for (const [ws, state] of this.clients) {
-      if (state.authenticated) {
+      if (!state.authenticated) {
+        continue;
+      }
+
+      const path = typeof data.path === "string" ? data.path : null;
+      if (
+        state.subscriptions.length === 0
+        || path === null
+        || state.subscriptions.some((pattern) => matchGlob(pattern, path))
+      ) {
         this.safeSend(ws, makeNotification(event, data));
       }
     }
@@ -204,7 +245,7 @@ export class WsServer {
     }
 
     try {
-      const result = handler(params ?? {});
+      const result = handler(params ?? {}, { ws, state });
       if (result instanceof Promise) {
         result
           .then((val) => this.safeSend(ws, makeResult(id, val)))
@@ -215,5 +256,13 @@ export class WsServer {
     } catch (err) {
       this.sendError(ws, id, err);
     }
+  }
+
+  private requirePatterns(params: Record<string, unknown>): string[] {
+    const patterns = params.patterns;
+    if (!Array.isArray(patterns) || patterns.some((pattern) => typeof pattern !== "string")) {
+      throw { code: RPC_INVALID_PARAMS, message: "patterns must be a string array" };
+    }
+    return patterns;
   }
 }

@@ -72,6 +72,16 @@ function hasReceipt(result, action) {
     && ok(Number.isInteger(result.receipt.bytesAfter), `${action} receipt bytesAfter integer`);
 }
 
+function matchGlobSpec(pattern, path) {
+  const regex = pattern
+    .replace(/[|\\{}()[\]^$+?.]/g, "\\$&")
+    .replace(/\*\*/g, "\u0000")
+    .replace(/\*/g, "[^/]*")
+    .replace(/\\\?/g, "[^/]")
+    .replace(/\u0000/g, ".*");
+  return new RegExp(`^${regex}$`).test(path);
+}
+
 async function runTests() {
   const createContent = "---\ntitle: E2E\ntags: [test]\n---\n\n# Created by E2E\n";
   const modifyContent = "---\ntitle: E2E Modified\n---\n\n# Modified by E2E\n";
@@ -88,9 +98,36 @@ async function runTests() {
   log("2. listCapabilities", caps);
   ok(caps.methods.length > 10, `${caps.methods.length} methods registered`);
 
-  // 3. vault.list (root) + SAFE-03 meta envelope
+  // 3. matchGlob spec cases + EVNT-02 RPC surface
+  ok(matchGlobSpec("KB/**", "KB/foo/bar.md"), "matchGlob matches recursive KB path");
+  ok(!matchGlobSpec("KB/**", "Daily/foo.md"), "matchGlob rejects other roots");
+  ok(matchGlobSpec("**/*.md", "Daily/foo.md"), "matchGlob matches markdown anywhere");
+  ok(!matchGlobSpec("Daily/*.md", "Daily/sub/x.md"), "matchGlob keeps single-segment star local");
+  ok(matchGlobSpec("Daily/?.md", "Daily/a.md"), "matchGlob matches single-char segment");
+  ok(!matchGlobSpec("Daily/?.md", "Daily/ab.md"), "matchGlob rejects multi-char question mark");
+
+  const eventsInitial = await call("events.list");
+  log("3a. events.list initial", eventsInitial);
+  ok(Array.isArray(eventsInitial.subscriptions), "events.list subscriptions array");
+
+  const eventsSubscribed = await call("events.subscribe", { patterns: ["KB/**", "**/*.md"] });
+  log("3b. events.subscribe", eventsSubscribed);
+  ok(eventsSubscribed.ok === true, "events.subscribe ok");
+  ok(eventsSubscribed.subscriptions.includes("KB/**"), "events.subscribe stores first pattern");
+  ok(eventsSubscribed.subscriptions.includes("**/*.md"), "events.subscribe stores second pattern");
+
+  const eventsAfterSubscribe = await call("events.list");
+  log("3c. events.list subscribed", eventsAfterSubscribe);
+  ok(eventsAfterSubscribe.subscriptions.length >= 2, "events.list reflects subscriptions");
+
+  const eventsUnsubscribed = await call("events.unsubscribe", { patterns: ["KB/**", "**/*.md"] });
+  log("3d. events.unsubscribe", eventsUnsubscribed);
+  ok(eventsUnsubscribed.ok === true, "events.unsubscribe ok");
+  ok(eventsUnsubscribed.subscriptions.length === 0, "events.unsubscribe clears patterns");
+
+  // 4. vault.list (root) + SAFE-03 meta envelope
   const listEnvelope = await callEnvelope("vault.list", { path: "" });
-  log("3. vault.list root", listEnvelope);
+  log("4. vault.list root", listEnvelope);
   ok(Number.isInteger(listEnvelope.meta?.estimatedTokens), "response meta estimatedTokens integer");
   ok(listEnvelope.meta.estimatedTokens === Math.ceil(JSON.stringify(listEnvelope.result).length / 4), "response meta estimatedTokens matches protocol formula");
   const list = listEnvelope.result;
@@ -99,9 +136,9 @@ async function runTests() {
   ok(Array.isArray(list.folders), "folders is array");
   ok(list.folders.includes("subfolder"), "subfolder in list");
 
-  // 4. vault.list (subfolder)
+  // 5. vault.list (subfolder)
   const subList = await call("vault.list", { path: "subfolder" });
-  log("4. vault.list subfolder", subList);
+  log("5. vault.list subfolder", subList);
   ok(subList.files.some(f => f.includes("Nested Note")), "nested note found");
 
   // 5. vault.read

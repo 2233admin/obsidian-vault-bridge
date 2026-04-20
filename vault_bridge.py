@@ -289,13 +289,13 @@ class VaultBridge:
     # -- subscriptions (Phase 4) -----------------------------------------
 
     async def subscribe(self, events: list[str]) -> dict:
-        return await self.call("subscribe", {"events": events})
+        return await self.call("events.subscribe", {"patterns": events})
 
     async def unsubscribe(self, events: list[str]) -> dict:
-        return await self.call("unsubscribe", {"events": events})
+        return await self.call("events.unsubscribe", {"patterns": events})
 
     async def list_events(self) -> dict:
-        return await self.call("listEvents")
+        return await self.call("events.list")
 
     # -- context manager --------------------------------------------------
 
