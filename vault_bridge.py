@@ -250,6 +250,8 @@ class VaultBridge:
         self._fallback: _FilesystemFallback | None = None
         self._sticky_subscriptions: list[str] = []
         self._reconnecting: bool = False
+        self._drop_pending: bool = False
+        self._reconnect_task: asyncio.Task | None = None
 
     @classmethod
     def from_discovery(cls, *, timeout: float = DEFAULT_TIMEOUT) -> VaultBridge:
@@ -298,6 +300,17 @@ class VaultBridge:
 
     async def close(self) -> None:
         self._closed = True
+        self._drop_pending = False  # block any pending watchdog iteration
+        task = self._reconnect_task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except BaseException:
+                # task may surface the caller's CancelledError or any
+                # connect-layer exception -- we just need it finished
+                pass
+        self._reconnect_task = None
         if self._listener:
             self._listener.cancel()
             self._listener = None
@@ -319,6 +332,12 @@ class VaultBridge:
         that's the dreamtime-cron contract (Gap 3). Use this method only when the
         caller actually wants to wait for a flaky server to come back (long-lived
         clients, reconnect loops).
+
+        CAVEAT: a `call()` that started before we switched to filesystem mode
+        will still see `self._ws is None` on its own check and raise
+        ConnectionError. Higher-level methods (read/stat/list/etc.) route
+        through `self._fallback` only when it was set BEFORE the method was
+        entered. Callers must treat ConnectionError as "retry once".
         """
         if max_attempts < 1:
             raise ValueError("max_attempts must be >= 1")
@@ -360,35 +379,48 @@ class VaultBridge:
         raise last_exc
 
     async def _reconnect_loop(self) -> None:
-        """Background reconnect on unintentional WS drop.
+        """Background reconnect watchdog for unintentional WS drops.
 
-        Triggered by _listen() when the socket closes without an explicit close()
-        call. Runs connect_with_retry(), replays sticky subscriptions, and exits.
-        In-flight calls have already been failed by _listen() before we get here
-        (friction #2 decision: no id survives reconnect, caller retries).
+        Driven by `self._drop_pending`. Each iteration clears the flag, runs
+        `connect_with_retry()`, and replays sticky subscriptions. If another
+        drop fires while we're reconnecting (e.g. server crashes twice in a
+        row), `_listen()` re-raises the flag and the loop iterates again.
+
+        `close()` cancels this task; an in-flight `connect_with_retry()` will
+        surface `asyncio.CancelledError` through `asyncio.sleep`, and the
+        `finally` block leaves the reconnect state clean.
         """
-        if self._reconnecting:
-            return
         self._reconnecting = True
         try:
-            LOGGER.warning("WebSocket dropped -- reconnecting")
-            result = await self.connect_with_retry()
-            if result.get("mode") == "filesystem":
-                return  # connect_with_retry already logged the fallback
-            if self._sticky_subscriptions:
+            while self._drop_pending and not self._closed:
+                self._drop_pending = False
+                LOGGER.warning("WebSocket dropped -- reconnecting")
                 try:
-                    await self.call(
-                        "events.subscribe",
-                        {"patterns": list(self._sticky_subscriptions)},
-                    )
-                    LOGGER.info(
-                        "replayed %d sticky subscriptions after reconnect",
-                        len(self._sticky_subscriptions),
-                    )
+                    result = await self.connect_with_retry()
+                except asyncio.CancelledError:
+                    raise
                 except Exception as exc:
-                    LOGGER.error("sticky-subscription replay failed: %s", exc)
+                    LOGGER.error("reconnect failed entirely: %s", exc)
+                    break
+                if self._closed:
+                    break  # close() raced us between retries -- honor it
+                if result.get("mode") == "filesystem":
+                    break  # connect_with_retry already logged the fallback
+                if self._sticky_subscriptions:
+                    try:
+                        await self.call(
+                            "events.subscribe",
+                            {"patterns": list(self._sticky_subscriptions)},
+                        )
+                        LOGGER.info(
+                            "replayed %d sticky subscriptions after reconnect",
+                            len(self._sticky_subscriptions),
+                        )
+                    except Exception as exc:
+                        LOGGER.error("sticky-subscription replay failed: %s", exc)
         finally:
             self._reconnecting = False
+            self._reconnect_task = None
 
     async def call(self, method: str, params: dict | None = None) -> Any:
         if self._closed or self._ws is None:
@@ -440,13 +472,16 @@ class VaultBridge:
 
             intentional = self._closed
             self._ws = None
-            if intentional or self._reconnecting:
-                # Caller invoked close(), or another reconnect is already in flight.
+            if intentional:
                 self._closed = True
                 return
-            # Unintentional drop (NAT timeout, server restart, suspended laptop,
-            # ConnectionClosedError). Kick off background reconnect.
-            asyncio.create_task(self._reconnect_loop())
+            # Unintentional drop. Signal the watchdog; spawn it if not already
+            # running. If a reconnect is in flight, the while-loop inside
+            # _reconnect_loop will pick the flag up on its next iteration --
+            # that's how a second drop during reconnect avoids being lost.
+            self._drop_pending = True
+            if self._reconnect_task is None or self._reconnect_task.done():
+                self._reconnect_task = asyncio.create_task(self._reconnect_loop())
 
     # -- events (Phase 4 ready) ------------------------------------------
 

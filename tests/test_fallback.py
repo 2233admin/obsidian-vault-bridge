@@ -6,6 +6,7 @@ when the Obsidian WebSocket server is unreachable.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import unittest.mock as mock
 
@@ -259,6 +260,7 @@ async def test_unsubscribe_removes_sticky(vault):
 async def test_reconnect_loop_replays_sticky_subscriptions(vault, _fast_sleep):
     vb = VaultBridge("ws://127.0.0.1:1", "fake-token", vault_path=str(vault))
     vb._sticky_subscriptions = ["KB/**", "Daily/**"]
+    vb._drop_pending = True  # simulate _listen() having signalled a drop
 
     replayed: list[tuple[str, dict]] = []
 
@@ -281,6 +283,7 @@ async def test_reconnect_loop_replays_sticky_subscriptions(vault, _fast_sleep):
 async def test_reconnect_loop_skips_replay_when_filesystem_mode(vault, _fast_sleep):
     vb = VaultBridge("ws://127.0.0.1:1", "fake-token", vault_path=str(vault))
     vb._sticky_subscriptions = ["KB/**"]
+    vb._drop_pending = True
 
     async def always_fail():
         raise ConnectionRefusedError("down")
@@ -297,6 +300,59 @@ async def test_reconnect_loop_skips_replay_when_filesystem_mode(vault, _fast_sle
 
     assert replayed == []  # filesystem mode: no server to replay to
     assert vb.is_filesystem_mode() is True
+
+
+@pytest.mark.asyncio
+async def test_reconnect_loop_drains_drop_during_reconnect(vault, _fast_sleep):
+    """P1 regression: second drop mid-reconnect must not be silently lost."""
+    vb = VaultBridge("ws://127.0.0.1:1", "fake-token", vault_path=str(vault))
+    vb._drop_pending = True
+
+    connect_calls = {"n": 0}
+
+    async def fake_connect():
+        connect_calls["n"] += 1
+        if connect_calls["n"] == 1:
+            # While loop iteration 1 is in progress, simulate a second drop
+            # firing from _listen -- re-raises the flag.
+            vb._drop_pending = True
+        return {"ok": True, "mode": "websocket"}
+
+    with mock.patch.object(vb, "connect", side_effect=fake_connect):
+        with mock.patch.object(vb, "call", return_value={"ok": True}):
+            await vb._reconnect_loop()
+
+    # Two full iterations = second drop was picked up, not lost.
+    assert connect_calls["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_close_cancels_in_flight_reconnect(vault):
+    """P2 regression: close() must win against an in-flight reconnect loop."""
+    vb = VaultBridge("ws://127.0.0.1:1", "fake-token", vault_path=str(vault))
+    vb._drop_pending = True
+
+    connect_started = asyncio.Event()
+    connect_cancelled = asyncio.Event()
+
+    async def slow_connect():
+        connect_started.set()
+        try:
+            await asyncio.sleep(30)  # will be cancelled by close()
+        except asyncio.CancelledError:
+            connect_cancelled.set()
+            raise
+        return {"ok": True, "mode": "websocket"}
+
+    with mock.patch.object(vb, "connect", side_effect=slow_connect):
+        vb._reconnect_task = asyncio.create_task(vb._reconnect_loop())
+        await connect_started.wait()
+        await vb.close()
+
+    assert connect_cancelled.is_set()
+    assert vb._closed is True
+    assert vb._reconnect_task is None
+    assert vb._reconnecting is False
 
 
 @pytest.mark.asyncio

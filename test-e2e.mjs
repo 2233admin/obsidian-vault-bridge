@@ -343,19 +343,31 @@ async function runTests() {
   }
 
   // --- EVNT-03 heartbeat smoke ---
-  // Opt-out via SKIP_HEARTBEAT=1 because the wait is intentionally longer
-  // than the server's 30s ping interval.
+  // Opt-out via SKIP_HEARTBEAT=1 because two 35s waits (70s total) are
+  // intentionally longer than TWO server ping cycles. The double wait is
+  // what proves pongs are actually flipping isAlive back: if the server's
+  // 'pong' handler were broken, the FIRST sweep would flip isAlive=false,
+  // and the SECOND sweep would find it still false -> terminate us. A
+  // single 35s wait only proves one side of the handshake.
   if (process.env.SKIP_HEARTBEAT === "1") {
     skipped++;
     console.log("heartbeat smoke -- SKIPPED (SKIP_HEARTBEAT=1)");
   } else {
-    console.log("heartbeat smoke -- waiting 35s for a server ping cycle...");
+    console.log("heartbeat smoke -- waiting 35s for ping #1...");
     await new Promise((resolve) => setTimeout(resolve, 35_000));
     try {
-      const caps = await call("listCapabilities");
-      ok(Array.isArray(caps.methods), "connection alive after 35s idle");
+      const caps1 = await call("listCapabilities");
+      ok(Array.isArray(caps1.methods), "connection alive after 1st ping cycle");
     } catch (e) {
-      ok(false, `connection dropped during heartbeat smoke: ${e.message}`);
+      ok(false, `connection dropped during heartbeat smoke (cycle 1): ${e.message}`);
+    }
+    console.log("heartbeat smoke -- waiting 35s for ping #2 (proves pong flips isAlive)...");
+    await new Promise((resolve) => setTimeout(resolve, 35_000));
+    try {
+      const caps2 = await call("listCapabilities");
+      ok(Array.isArray(caps2.methods), "connection alive after 2nd ping cycle (pongs working)");
+    } catch (e) {
+      ok(false, `connection dropped during heartbeat smoke (cycle 2): ${e.message}`);
     }
   }
 
