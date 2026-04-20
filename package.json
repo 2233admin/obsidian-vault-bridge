@@ -1,14 +1,14 @@
 {
-  "name": "obsidian-llm-wiki",
+  "name": "obsidian-vault-bridge",
   "version": "0.1.0",
-  "description": "Let your AI agent read, search, and build on your Obsidian notes. MCP server + WebSocket + filesystem fallback. Karpathy LLM Wiki implementation.",
+  "description": "Obsidian plugin bridge: WebSocket RPC + event stream + MCP adapter, exposing vault CRUD and other plugins' capabilities to external agents.",
   "main": "main.js",
   "license": "MIT",
   "author": "Curry",
-  "mcpName": "io.github.2233admin/obsidian-llm-wiki",
+  "mcpName": "io.github.2233admin/obsidian-vault-bridge",
   "repository": {
     "type": "git",
-    "url": "https://github.com/2233admin/obsidian-llm-wiki"
+    "url": "https://github.com/2233admin/obsidian-vault-bridge"
   },
   "keywords": [
     "obsidian",

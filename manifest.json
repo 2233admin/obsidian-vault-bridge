@@ -1,6 +1,6 @@
 {
-  "id": "llm-wiki",
-  "name": "LLM Wiki",
+  "id": "llm-wiki-bridge",
+  "name": "LLM Wiki Bridge",
   "version": "0.1.0",
   "minAppVersion": "1.0.0",
   "description": "Turn your vault into an AI-powered knowledge base. MCP server for Claude Code, Cursor, and other AI agents. Inspired by Karpathy's LLM Wiki.",
