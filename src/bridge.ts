@@ -229,11 +229,14 @@ export class VaultBridge {
         results.push(file.path);
         continue;
       }
-      // frontmatter tags (tags: [x, y] in YAML)
+      // frontmatter tags (tags: [x, y] in YAML). Obsidian normalizes entries to
+      // "#tag" in the cache even when the source YAML omits the hash, so accept
+      // both bare and hash-prefixed forms.
       const fmTags = cache.frontmatter?.tags ?? cache.frontmatter?.tag;
-      if (Array.isArray(fmTags) && fmTags.includes(bare)) {
+      const matches = (t: unknown) => typeof t === "string" && (t === bare || t === hashTag);
+      if (Array.isArray(fmTags) && fmTags.some(matches)) {
         results.push(file.path);
-      } else if (typeof fmTags === "string" && fmTags === bare) {
+      } else if (matches(fmTags)) {
         results.push(file.path);
       }
     }
