@@ -342,6 +342,23 @@ async function runTests() {
     ok(e.message.includes("traversal") || e.message.includes("-32602"), "path traversal blocked");
   }
 
+  // --- EVNT-03 heartbeat smoke ---
+  // Opt-out via SKIP_HEARTBEAT=1 because the wait is intentionally longer
+  // than the server's 30s ping interval.
+  if (process.env.SKIP_HEARTBEAT === "1") {
+    skipped++;
+    console.log("heartbeat smoke -- SKIPPED (SKIP_HEARTBEAT=1)");
+  } else {
+    console.log("heartbeat smoke -- waiting 35s for a server ping cycle...");
+    await new Promise((resolve) => setTimeout(resolve, 35_000));
+    try {
+      const caps = await call("listCapabilities");
+      ok(Array.isArray(caps.methods), "connection alive after 35s idle");
+    } catch (e) {
+      ok(false, `connection dropped during heartbeat smoke: ${e.message}`);
+    }
+  }
+
   // Summary
   console.log("\n========================================");
   console.log(`RESULTS: ${passed} passed, ${failed} failed, ${skipped} skipped`);

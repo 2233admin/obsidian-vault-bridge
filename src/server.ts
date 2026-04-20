@@ -28,6 +28,7 @@ export class WsServer {
   private wss: WebSocketServer | null = null;
   private clients: Map<WebSocket, ClientState> = new Map();
   private handlers: Map<string, RpcHandler> = new Map();
+  private pingInterval: NodeJS.Timeout | null = null;
 
   constructor(
     private settings: { port: number; token: string },
@@ -77,7 +78,7 @@ export class WsServer {
         return;
       }
 
-      this.clients.set(ws, { authenticated: false, subscriptions: [] });
+      this.clients.set(ws, { authenticated: false, subscriptions: [], isAlive: true });
 
       const authTimer = setTimeout(() => {
         if (!this.clients.get(ws)?.authenticated) {
@@ -85,6 +86,11 @@ export class WsServer {
           ws.terminate(); // force-kill, don't wait for graceful close
         }
       }, 5000);
+
+      ws.on("pong", () => {
+        const state = this.clients.get(ws);
+        if (state) state.isAlive = true;
+      });
 
       ws.on("message", (raw: Buffer) => {
         this.handleMessage(ws, raw, authTimer);
@@ -107,9 +113,18 @@ export class WsServer {
     });
 
     this.tryListen(this.settings.port, 0);
+
+    // EVNT-03 heartbeat: every 30s, any client that missed the previous
+    // pong gets terminated; the rest get a fresh ping. Two consecutive
+    // misses -> ~60s of silence -> dead.
+    this.pingInterval = setInterval(() => this.heartbeat(), 30_000);
   }
 
   stop(): void {
+    if (this.pingInterval) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
+    }
     for (const ws of this.clients.keys()) {
       ws.terminate(); // force-kill all connections
     }
@@ -118,6 +133,22 @@ export class WsServer {
     this.httpServer?.close();
     this.wss = null;
     this.httpServer = null;
+  }
+
+  private heartbeat(): void {
+    for (const [ws, state] of this.clients) {
+      if (!state.isAlive) {
+        this.clients.delete(ws);
+        ws.terminate();
+        continue;
+      }
+      state.isAlive = false;
+      try {
+        ws.ping();
+      } catch {
+        // Socket already torn down; next sweep will terminate via !isAlive.
+      }
+    }
   }
 
   registerHandler(method: string, handler: RpcHandler): void {

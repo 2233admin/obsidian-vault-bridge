@@ -23,6 +23,7 @@ export const DEFAULT_SETTINGS: VaultBridgeSettings = {
 export interface ClientState {
   authenticated: boolean;
   subscriptions: string[];
+  isAlive: boolean;
 }
 
 export interface SearchOptions {
