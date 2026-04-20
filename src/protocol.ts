@@ -16,12 +16,17 @@ export interface JsonRpcResponse {
   id: number | string | null;
   result?: unknown;
   error?: JsonRpcError;
+  meta?: JsonRpcMeta;
 }
 
 export interface JsonRpcError {
   code: number;
   message: string;
   data?: unknown;
+}
+
+export interface JsonRpcMeta {
+  estimatedTokens: number;
 }
 
 export const RPC_PARSE_ERROR = -32700;
@@ -55,8 +60,18 @@ export function parseMessage(raw: string): JsonRpcRequest | { error: JsonRpcErro
   return msg as JsonRpcRequest;
 }
 
+// Successful JSON-RPC responses include a top-level meta block so clients can
+// budget response cost without parsing result payloads themselves.
 export function makeResult(id: number | string, result: unknown): string {
-  return JSON.stringify({ jsonrpc: "2.0", id, result });
+  const serializedResult = JSON.stringify(result) ?? "null";
+  return JSON.stringify({
+    jsonrpc: "2.0",
+    id,
+    result,
+    meta: {
+      estimatedTokens: Math.ceil(serializedResult.length / 4),
+    },
+  });
 }
 
 export function makeError(id: number | string | null, code: number, message: string, data?: unknown): string {

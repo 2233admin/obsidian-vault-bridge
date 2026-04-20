@@ -28,13 +28,21 @@ let failed = 0;
 let skipped = 0;
 
 function call(method, params = {}) {
+  return sendRequest(method, params, false);
+}
+
+function callEnvelope(method, params = {}) {
+  return sendRequest(method, params, true);
+}
+
+function sendRequest(method, params = {}, full = false) {
   const id = ++idSeq;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
       reject(new Error(`Timeout: ${method} (id=${id})`));
     }, 10000);
-    pending.set(id, { resolve, reject, timer, method });
+    pending.set(id, { resolve, reject, timer, method, full });
     ws.send(JSON.stringify({ jsonrpc: "2.0", method, params, id }));
   });
 }
@@ -80,9 +88,12 @@ async function runTests() {
   log("2. listCapabilities", caps);
   ok(caps.methods.length > 10, `${caps.methods.length} methods registered`);
 
-  // 3. vault.list (root)
-  const list = await call("vault.list", { path: "" });
-  log("3. vault.list root", list);
+  // 3. vault.list (root) + SAFE-03 meta envelope
+  const listEnvelope = await callEnvelope("vault.list", { path: "" });
+  log("3. vault.list root", listEnvelope);
+  ok(Number.isInteger(listEnvelope.meta?.estimatedTokens), "response meta estimatedTokens integer");
+  ok(listEnvelope.meta.estimatedTokens === Math.ceil(JSON.stringify(listEnvelope.result).length / 4), "response meta estimatedTokens matches protocol formula");
+  const list = listEnvelope.result;
   ok(Array.isArray(list.files), "files is array");
   ok(list.files.includes("Welcome.md"), "Welcome.md in list");
   ok(Array.isArray(list.folders), "folders is array");
@@ -325,7 +336,7 @@ ws.on("message", (raw) => {
   if (msg.error) {
     entry.reject(new Error(`${entry.method}: ${msg.error.message} (code=${msg.error.code})`));
   } else {
-    entry.resolve(msg.result);
+    entry.resolve(entry.full ? msg : msg.result);
   }
 });
 
