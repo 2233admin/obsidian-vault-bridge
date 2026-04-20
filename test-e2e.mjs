@@ -56,7 +56,19 @@ function ok(cond, msg) {
   return true;
 }
 
+function hasReceipt(result, action) {
+  return ok(typeof result.receipt === "object" && result.receipt !== null, `${action} receipt present`)
+    && ok(result.receipt.action === action, `${action} receipt action`)
+    && ok(typeof result.receipt.timestamp === "string", `${action} receipt timestamp`)
+    && ok(Number.isInteger(result.receipt.bytesBefore), `${action} receipt bytesBefore integer`)
+    && ok(Number.isInteger(result.receipt.bytesAfter), `${action} receipt bytesAfter integer`);
+}
+
 async function runTests() {
+  const createContent = "---\ntitle: E2E\ntags: [test]\n---\n\n# Created by E2E\n";
+  const modifyContent = "---\ntitle: E2E Modified\n---\n\n# Modified by E2E\n";
+  const appendContent = "\n## Appended Section\n";
+
   // 1. authenticate
   const auth = await call("authenticate", { token: TOKEN });
   log("1. authenticate", auth);
@@ -115,11 +127,17 @@ async function runTests() {
   // 10. vault.create (real)
   const createReal = await call("vault.create", {
     path: "E2E Test.md",
-    content: "---\ntitle: E2E\ntags: [test]\n---\n\n# Created by E2E\n",
+    content: createContent,
     dryRun: false,
   });
   log("10. vault.create real", createReal);
   ok(createReal.ok === true, "create succeeded");
+  if (hasReceipt(createReal, "create")) {
+    ok(createReal.receipt.path === "E2E Test.md", "create receipt path");
+    ok(createReal.receipt.previousContent === null, "create previousContent null");
+    ok(createReal.receipt.bytesBefore === 0, "create bytesBefore zero");
+    ok(createReal.receipt.bytesAfter === Buffer.byteLength(createContent, "utf-8"), "create bytesAfter matches content size");
+  }
 
   // 11. verify create
   const verifyCreate = await call("vault.read", { path: "E2E Test.md" });
@@ -133,11 +151,17 @@ async function runTests() {
   // 13. vault.modify (real)
   const modReal = await call("vault.modify", {
     path: "E2E Test.md",
-    content: "---\ntitle: E2E Modified\n---\n\n# Modified by E2E\n",
+    content: modifyContent,
     dryRun: false,
   });
   log("13. vault.modify real", modReal);
   ok(modReal.ok === true, "modify succeeded");
+  if (hasReceipt(modReal, "modify")) {
+    ok(modReal.receipt.path === "E2E Test.md", "modify receipt path");
+    ok(modReal.receipt.previousContent.includes("Created by E2E"), "modify previousContent captured");
+    ok(modReal.receipt.bytesBefore === Buffer.byteLength(modReal.receipt.previousContent, "utf-8"), "modify bytesBefore matches prior content");
+    ok(modReal.receipt.bytesAfter === Buffer.byteLength(modifyContent, "utf-8"), "modify bytesAfter matches new content");
+  }
 
   const verifyMod = await call("vault.read", { path: "E2E Test.md" });
   ok(verifyMod.content.includes("Modified by E2E"), "modify persisted");
@@ -145,11 +169,17 @@ async function runTests() {
   // 14. vault.append
   const appendReal = await call("vault.append", {
     path: "E2E Test.md",
-    content: "\n## Appended Section\n",
+    content: appendContent,
     dryRun: false,
   });
   log("14. vault.append", appendReal);
   ok(appendReal.ok === true, "append succeeded");
+  if (hasReceipt(appendReal, "append")) {
+    ok(appendReal.receipt.path === "E2E Test.md", "append receipt path");
+    ok(appendReal.receipt.previousContent.includes("Modified by E2E"), "append previousContent captured");
+    ok(appendReal.receipt.bytesBefore === Buffer.byteLength(appendReal.receipt.previousContent, "utf-8"), "append bytesBefore matches prior content");
+    ok(appendReal.receipt.bytesAfter === appendReal.receipt.bytesBefore + Buffer.byteLength(appendContent, "utf-8"), "append bytesAfter adds appended content");
+  }
 
   const verifyAppend = await call("vault.read", { path: "E2E Test.md" });
   ok(verifyAppend.content.includes("Appended Section"), "append persisted");
@@ -167,6 +197,14 @@ async function runTests() {
   });
   log("16. vault.rename real", renameReal);
   ok(renameReal.ok === true, "rename succeeded");
+  if (hasReceipt(renameReal, "rename")) {
+    ok(renameReal.path === "E2E Renamed.md", "rename result path");
+    ok(renameReal.from === "E2E Test.md", "rename result from");
+    ok(renameReal.to === "E2E Renamed.md", "rename result to");
+    ok(renameReal.receipt.path === "E2E Test.md", "rename receipt source path");
+    ok(renameReal.receipt.previousContent.includes("Appended Section"), "rename previousContent captured");
+    ok(renameReal.receipt.bytesBefore === renameReal.receipt.bytesAfter, "rename bytes stable");
+  }
 
   const verifyRename = await call("vault.exists", { path: "E2E Renamed.md" });
   ok(verifyRename.exists === true, "renamed file exists");
@@ -230,6 +268,12 @@ async function runTests() {
   const del = await call("vault.delete", { path: "E2E Renamed.md", dryRun: false });
   log("26. vault.delete cleanup", del);
   ok(del.ok === true, "delete succeeded");
+  if (hasReceipt(del, "delete")) {
+    ok(del.receipt.path === "E2E Renamed.md", "delete receipt path");
+    ok(del.receipt.previousContent.includes("Appended Section"), "delete previousContent captured");
+    ok(del.receipt.bytesBefore === Buffer.byteLength(del.receipt.previousContent, "utf-8"), "delete bytesBefore matches prior content");
+    ok(del.receipt.bytesAfter === 0, "delete bytesAfter zero");
+  }
 
   const verifyDel = await call("vault.exists", { path: "E2E Renamed.md" });
   ok(verifyDel.exists === false, "deleted file gone");

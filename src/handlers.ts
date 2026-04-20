@@ -39,6 +39,8 @@ function toRpcError(err: unknown, fallbackCode: number = -32000): RpcError {
   return { code: fallbackCode, message: String(err) };
 }
 
+type ReceiptAction = "create" | "modify" | "append" | "delete" | "rename";
+
 function validatePath(p: unknown): string {
   if (typeof p !== "string" || !p.trim())
     throw { code: RPC_INVALID_PARAMS, message: "path required" } as RpcError;
@@ -78,6 +80,46 @@ async function safeExec<T>(fn: () => Promise<T>): Promise<T> {
       throw { code: RPC_FILE_NOT_FOUND, message: msg } as RpcError;
     throw { code: -32000, message: msg } as RpcError;
   }
+}
+
+async function readPreviousContent(bridge: VaultBridge, path: string): Promise<string | null> {
+  try {
+    return await bridge.read(path);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const lower = msg.toLowerCase();
+    if (lower.includes("not found") || lower.includes("no such") || lower.includes("doesn't exist")) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+function byteLength(content: string | null): number {
+  return content === null ? 0 : Buffer.byteLength(content, "utf-8");
+}
+
+function makeReceipt(
+  action: ReceiptAction,
+  path: string,
+  previousContent: string | null,
+  bytesAfter: number,
+): {
+  action: ReceiptAction;
+  path: string;
+  previousContent: string | null;
+  timestamp: string;
+  bytesBefore: number;
+  bytesAfter: number;
+} {
+  return {
+    action,
+    path,
+    previousContent,
+    timestamp: new Date().toISOString(),
+    bytesBefore: byteLength(previousContent),
+    bytesAfter,
+  };
 }
 
 export function registerHandlers(
@@ -134,7 +176,11 @@ export function registerHandlers(
     if (isDryRun(p, settings))
       return { dryRun: true, action: "create", path, wouldSucceed: !bridge.exists(path) };
     const created = await safeExec(() => bridge.create(path, content));
-    return { ok: true, path: created };
+    return {
+      ok: true,
+      path: created,
+      receipt: makeReceipt("create", created, null, byteLength(content)),
+    };
   });
 
   server.registerHandler("vault.modify", async (p) => {
@@ -161,8 +207,13 @@ export function registerHandlers(
     }
     if (isDryRun(p, settings))
       return { dryRun: true, action: "modify", path, wouldSucceed: bridge.exists(path) };
+    const previousContent = await readPreviousContent(bridge, path);
     await safeExec(() => bridge.modify(path, content));
-    return { ok: true, path };
+    return {
+      ok: true,
+      path,
+      receipt: makeReceipt("modify", path, previousContent, byteLength(content)),
+    };
   });
 
   server.registerHandler("vault.append", async (p) => {
@@ -190,8 +241,13 @@ export function registerHandlers(
     }
     if (isDryRun(p, settings))
       return { dryRun: true, action: "append", path, wouldSucceed: bridge.exists(path) };
+    const previousContent = await readPreviousContent(bridge, path);
     await safeExec(() => bridge.append(path, content));
-    return { ok: true, path };
+    return {
+      ok: true,
+      path,
+      receipt: makeReceipt("append", path, previousContent, byteLength(previousContent) + byteLength(content)),
+    };
   });
 
   server.registerHandler("vault.delete", async (p) => {
@@ -208,8 +264,13 @@ export function registerHandlers(
     }
     if (isDryRun(p, settings))
       return { dryRun: true, action: "delete", path, force, wouldSucceed: bridge.exists(path) };
+    const previousContent = await readPreviousContent(bridge, path);
     await safeExec(() => bridge.remove(path, force));
-    return { ok: true, path };
+    return {
+      ok: true,
+      path,
+      receipt: makeReceipt("delete", path, previousContent, 0),
+    };
   });
 
   server.registerHandler("vault.rename", async (p) => {
@@ -234,8 +295,15 @@ export function registerHandlers(
     }
     if (isDryRun(p, settings))
       return { dryRun: true, action: "rename", from, to, wouldSucceed: bridge.exists(from) && !bridge.exists(to) };
+    const previousContent = await readPreviousContent(bridge, from);
     await safeExec(() => bridge.rename(from, to));
-    return { ok: true, from, to };
+    return {
+      ok: true,
+      path: to,
+      from,
+      to,
+      receipt: makeReceipt("rename", from, previousContent, byteLength(previousContent)),
+    };
   });
 
   server.registerHandler("vault.mkdir", async (p) => {
