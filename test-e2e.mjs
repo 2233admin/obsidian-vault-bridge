@@ -87,11 +87,42 @@ async function runTests() {
   const modifyContent = "---\ntitle: E2E Modified\n---\n\n# Modified by E2E\n";
   const appendContent = "\n## Appended Section\n";
 
+  // Fixture constants (self-contained; no pre-existing vault state required)
+  const FIXTURE_WELCOME = "_E2E_Welcome.md";
+  const FIXTURE_SUBFOLDER = "_E2E_subfolder";
+  const FIXTURE_NESTED = `${FIXTURE_SUBFOLDER}/Nested Note.md`;
+  const welcomeContent = "---\ntitle: Welcome\ntags: [test]\nstatus: active\n---\n\n# Welcome\nThis is a vault-bridge E2E fixture.\n";
+  const nestedContent = "---\ntitle: Nested\ntags: [test]\n---\n\n# Nested Note\nLinked from [[_E2E_Welcome]].\n";
+
   // 1. authenticate
   const auth = await call("authenticate", { token: TOKEN });
   log("1. authenticate", auth);
   ok(auth.ok === true, "auth ok");
   ok(Array.isArray(auth.capabilities), "capabilities listed");
+
+  // --- Setup: create self-contained fixtures (idempotent across runs) ---
+  // Clean any leftovers from a prior aborted run (fixtures + inline test files).
+  for (const p of [FIXTURE_NESTED, FIXTURE_WELCOME, "E2E Test.md", "E2E Renamed.md"]) {
+    const before = await call("vault.exists", { path: p });
+    if (before.exists) {
+      try {
+        await call("vault.delete", { path: p, dryRun: false, force: true });
+      } catch (e) {
+        console.log(`  setup: delete ${p} threw: ${e.message}`);
+      }
+      const after = await call("vault.exists", { path: p });
+      if (after.exists) {
+        console.log(`  setup: WARN ${p} still exists after delete attempt`);
+      }
+    }
+  }
+  const mkdirRes = await call("vault.exists", { path: FIXTURE_SUBFOLDER });
+  if (!mkdirRes.exists) {
+    try { await call("vault.mkdir", { path: FIXTURE_SUBFOLDER, dryRun: false }); }
+    catch (e) { console.log(`  setup: mkdir ${FIXTURE_SUBFOLDER} threw: ${e.message}`); }
+  }
+  await call("vault.create", { path: FIXTURE_WELCOME, content: welcomeContent, dryRun: false });
+  await call("vault.create", { path: FIXTURE_NESTED, content: nestedContent, dryRun: false });
 
   // 2. listCapabilities
   const caps = await call("listCapabilities");
@@ -132,34 +163,34 @@ async function runTests() {
   ok(listEnvelope.meta.estimatedTokens === Math.ceil(JSON.stringify(listEnvelope.result).length / 4), "response meta estimatedTokens matches protocol formula");
   const list = listEnvelope.result;
   ok(Array.isArray(list.files), "files is array");
-  ok(list.files.includes("Welcome.md"), "Welcome.md in list");
+  ok(list.files.includes(FIXTURE_WELCOME), "fixture welcome in list");
   ok(Array.isArray(list.folders), "folders is array");
-  ok(list.folders.includes("subfolder"), "subfolder in list");
+  ok(list.folders.includes(FIXTURE_SUBFOLDER), "fixture subfolder in list");
 
   // 5. vault.list (subfolder)
-  const subList = await call("vault.list", { path: "subfolder" });
+  const subList = await call("vault.list", { path: FIXTURE_SUBFOLDER });
   log("5. vault.list subfolder", subList);
   ok(subList.files.some(f => f.includes("Nested Note")), "nested note found");
 
   // 5. vault.read
-  const read = await call("vault.read", { path: "Welcome.md" });
+  const read = await call("vault.read", { path: FIXTURE_WELCOME });
   log("5. vault.read", read);
   ok(typeof read.content === "string", "content is string");
   ok(read.content.includes("vault-bridge"), "content correct");
 
   // 6. vault.read (nested)
-  const readNested = await call("vault.read", { path: "subfolder/Nested Note.md" });
+  const readNested = await call("vault.read", { path: FIXTURE_NESTED });
   log("6. vault.read nested", readNested);
   ok(readNested.content.includes("Nested"), "nested read works");
 
   // 7. vault.stat
-  const stat = await call("vault.stat", { path: "Welcome.md" });
+  const stat = await call("vault.stat", { path: FIXTURE_WELCOME });
   log("7. vault.stat", stat);
-  ok(stat.path === "Welcome.md", "stat path");
+  ok(stat.path === FIXTURE_WELCOME, "stat path");
   ok(typeof stat.size === "number", "stat size");
 
   // 8. vault.exists
-  const exists1 = await call("vault.exists", { path: "Welcome.md" });
+  const exists1 = await call("vault.exists", { path: FIXTURE_WELCOME });
   log("8a. vault.exists (true)", exists1);
   ok(exists1.exists === true, "existing file");
 
@@ -168,7 +199,7 @@ async function runTests() {
   ok(exists2.exists === false, "nonexistent file");
 
   // 9. vault.create (dry-run, default)
-  const createDry = await call("vault.create", { path: "E2E Test.md", content: "# test" });
+  const createDry = await call("vault.create", { path: "E2E Test.md", content: createContent });
   log("9. vault.create dry-run", createDry);
   ok(createDry.dryRun === true, "dry-run respected");
 
@@ -192,7 +223,7 @@ async function runTests() {
   ok(verifyCreate.content.includes("Created by E2E"), "create persisted");
 
   // 12. vault.modify (dry-run)
-  const modDry = await call("vault.modify", { path: "E2E Test.md", content: "modified" });
+  const modDry = await call("vault.modify", { path: "E2E Test.md", content: modifyContent });
   log("12. vault.modify dry-run", modDry);
   ok(modDry.dryRun === true, "modify dry-run");
 
@@ -264,7 +295,7 @@ async function runTests() {
   ok(search.results.length > 0, "search finds results");
 
   // 18. vault.getMetadata
-  const meta = await call("vault.getMetadata", { path: "Welcome.md" });
+  const meta = await call("vault.getMetadata", { path: FIXTURE_WELCOME });
   log("18. vault.getMetadata", meta);
   ok(meta.frontmatter !== undefined || meta.tags !== undefined, "metadata returned");
 
@@ -285,8 +316,8 @@ async function runTests() {
   ok(typeof graph === "object", "graph returns object");
 
   // 22. vault.backlinks
-  const backlinks = await call("vault.backlinks", { path: "Welcome.md" });
-  log("22. vault.backlinks Welcome.md", backlinks);
+  const backlinks = await call("vault.backlinks", { path: FIXTURE_WELCOME });
+  log(`22. vault.backlinks ${FIXTURE_WELCOME}`, backlinks);
   ok(Array.isArray(backlinks.backlinks), "backlinks array");
 
   // 23. vault.lint
@@ -303,9 +334,9 @@ async function runTests() {
   const batch = await call("vault.batch", {
     dryRun: true,
     operations: [
-      { method: "vault.read", params: { path: "Welcome.md" } },
+      { method: "vault.read", params: { path: FIXTURE_WELCOME } },
       { method: "vault.exists", params: { path: "nope.md" } },
-      { method: "vault.stat", params: { path: "Welcome.md" } },
+      { method: "vault.stat", params: { path: FIXTURE_WELCOME } },
     ],
   });
   log("25. vault.batch", batch);
@@ -368,6 +399,13 @@ async function runTests() {
       ok(Array.isArray(caps2.methods), "connection alive after 2nd ping cycle (pongs working)");
     } catch (e) {
       ok(false, `connection dropped during heartbeat smoke (cycle 2): ${e.message}`);
+    }
+  }
+
+  // --- Teardown: remove fixtures created by setup (best-effort) ---
+  for (const p of [FIXTURE_NESTED, FIXTURE_WELCOME]) {
+    try { await call("vault.delete", { path: p, dryRun: false }); } catch (e) {
+      console.log(`  teardown: could not delete ${p}: ${e.message}`);
     }
   }
 
