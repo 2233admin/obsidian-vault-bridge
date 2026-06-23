@@ -1,0 +1,40 @@
+version = 1
+
+test_patterns = [
+  "tests/**",
+  "test/**",
+  "**/*test*",
+  "**/*.test.*",
+]
+
+exclude_patterns = [
+  "node_modules/**",
+  "dist/**",
+  "target/**",
+  "vendor/**",
+  "build/**",
+  "coverage/**",
+  "bundle.js",
+  "**/bundle.js",
+  "**/generated/**",
+]
+
+[[analyzers]]
+name = "python"
+enabled = true
+
+  [analyzers.meta]
+  runtime_version = "3.x.x"
+  max_line_length = 120
+  cyclomatic_complexity_threshold = "high"
+
+[[analyzers]]
+name = "javascript"
+enabled = true
+dependency_file_paths = ["."]
+
+  [analyzers.meta]
+  environment = ["nodejs"]
+  module_system = "es-modules"
+  dialect = "typescript"
+  cyclomatic_complexity_threshold = "high"
