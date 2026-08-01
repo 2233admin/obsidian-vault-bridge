@@ -4,9 +4,18 @@
 
 **English** | [中文](README.zh-CN.md) | [日本語](README.ja.md)
 
-**Let your AI read, search, and build on your Obsidian notes.**
+**让你的 AI 读取、搜索并在你的 Obsidian 笔记上构建。**
 
-Inspired by [Karpathy's LLM Wiki](https://www.youtube.com/watch?v=zisonDtp3GQ) -- but you can install it right now.
+受 [Karpathy 的 LLM Wiki](https://www.youtube.com/watch?v=zisonDtp3GQ) 启发——但你可以现在就装上。
+
+![License](https://img.shields.io/badge/license-MIT-blue)
+![Stars](https://img.shields.io/github/stars/2233admin/obsidian-vault-bridge)
+![Last Commit](https://img.shields.io/github/last-commit/2233admin/obsidian-vault-bridge)
+![Node](https://img.shields.io/badge/Node-18+-339933)
+
+- **One-liner**: Turns your Obsidian vault into an MCP server any AI agent can read, search, and write.
+- **For**: You want Claude Code / Cursor / Windsurf to work directly on your notes, with dry-run-safe writes.
+- **Not for**: You don't use Obsidian, or your tools don't speak MCP.
 
 ```
   .obsidian/vault/          MCP stdio           Claude Code
@@ -19,11 +28,11 @@ Inspired by [Karpathy's LLM Wiki](https://www.youtube.com/watch?v=zisonDtp3GQ) -
 ```
 
 ```
-You:    "What did I write about distributed consensus last month?"
-Claude: *searches your vault, reads 3 notes, synthesizes an answer with [[backlinks]]*
+你：    "我上个月写的关于分布式共识的笔记在哪？"
+Claude: *搜索你的 vault，读 3 篇笔记，用 [[backlinks]] 合成一个答案*
 ```
 
-Vault Bridge turns your Obsidian vault into an MCP server that any AI agent (Claude Code, Cursor, Windsurf) can connect to. Read, write, search, and compile knowledge -- with your notes as the source of truth.
+Vault Bridge 把你的 Obsidian vault 变成一个 MCP 服务器，任何 AI agent（Claude Code、Cursor、Windsurf）都能连上。读、写、搜索、编译知识——以你的笔记为事实来源。
 
 ---
 
@@ -271,6 +280,14 @@ A term coined by Andrej Karpathy: use an LLM to "compile" raw sources (articles,
 
 **What AI agents are supported?**
 Any MCP-compatible agent: Claude Code, Claude Desktop, Cursor, Windsurf, and any tool that supports the Model Context Protocol.
+
+---
+
+## Related Projects
+
+- [obsidian-second-brain](https://github.com/2233admin/obsidian-second-brain) — A vault that rewrites itself
+- [markdown-memory](https://github.com/2233admin/markdown-memory) — File-driven AI memory bridge
+- [voile](https://github.com/2233admin/voile) — Chat logs compiled into Obsidian knowledge
 
 ---
 
