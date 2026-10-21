@@ -8,7 +8,7 @@ on:
 jobs:
   ts-build:
     name: TypeScript Build
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_5070X_ENABLED == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'ci-5070x-linux' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -28,7 +28,7 @@ jobs:
 
   ts-typecheck:
     name: TypeScript Type Check
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_5070X_ENABLED == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'ci-5070x-linux' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -45,7 +45,7 @@ jobs:
 
   python-lint-test:
     name: Python Lint + Test
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_5070X_ENABLED == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'ci-5070x-linux' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -71,7 +71,7 @@ jobs:
 
   connector-syntax:
     name: connector.js Syntax Check
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_5070X_ENABLED == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'ci-5070x-linux' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
